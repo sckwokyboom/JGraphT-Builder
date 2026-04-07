@@ -1,0 +1,385 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <title>Type Graph Viewer</title>
+    <script src="https://unpkg.com/cytoscape@3.30.4/dist/cytoscape.min.js"></script>
+    <style>
+        * { margin: 0; padding: 0; box-sizing: border-box; }
+        body { font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', sans-serif; }
+        #cy { width: 100vw; height: 100vh; }
+        #controls {
+            position: absolute; top: 10px; left: 10px; z-index: 10;
+            background: rgba(255,255,255,0.95); padding: 12px; border-radius: 8px;
+            box-shadow: 0 2px 8px rgba(0,0,0,0.15); max-width: 300px;
+        }
+        #controls h3 { margin-bottom: 8px; font-size: 14px; }
+        #controls label { display: block; margin: 4px 0; font-size: 13px; cursor: pointer; }
+        #controls input[type=text] {
+            width: 100%; padding: 6px; margin: 4px 0 8px; border: 1px solid #ccc;
+            border-radius: 4px; font-size: 13px;
+        }
+        .legend { margin-top: 8px; font-size: 12px; }
+        .legend-item { display: flex; align-items: center; margin: 2px 0; }
+        .legend-color { width: 20px; height: 3px; margin-right: 6px; }
+        #info {
+            position: absolute; bottom: 10px; left: 10px; z-index: 10;
+            background: rgba(255,255,255,0.95); padding: 10px; border-radius: 8px;
+            box-shadow: 0 2px 8px rgba(0,0,0,0.15); font-size: 12px; max-width: 400px;
+            display: none;
+        }
+        button {
+            padding: 4px 10px; margin: 2px; border: 1px solid #ccc;
+            border-radius: 4px; background: #fff; cursor: pointer; font-size: 12px;
+        }
+        button:hover { background: #f0f0f0; }
+    </style>
+</head>
+<body>
+    <div id="controls">
+        <h3>Type Graph</h3>
+        <input type="text" id="search" placeholder="Search types...">
+        <div>
+            <label><input type="checkbox" class="edge-filter" value="IS" checked> IS (extends/implements)</label>
+            <label><input type="checkbox" class="edge-filter" value="HAS" checked> HAS (fields)</label>
+            <label><input type="checkbox" class="edge-filter" value="CONSUMES" checked> CONSUMES (params)</label>
+            <label><input type="checkbox" class="edge-filter" value="PRODUCES" checked> PRODUCES (returns)</label>
+        </div>
+        <div style="margin-top:8px">
+            <button onclick="cy.layout({name:'cose',animate:true}).run()">Relayout</button>
+            <button onclick="cy.fit()">Fit</button>
+        </div>
+        <div class="legend">
+            <div class="legend-item"><div class="legend-color" style="background:#3498db;height:3px"></div>IS</div>
+            <div class="legend-item"><div class="legend-color" style="background:#2ecc71"></div>HAS</div>
+            <div class="legend-item"><div class="legend-color" style="background:#e67e22"></div>CONSUMES</div>
+            <div class="legend-item"><div class="legend-color" style="background:#e74c3c"></div>PRODUCES</div>
+        </div>
+    </div>
+    <div id="info"></div>
+    <div id="cy"></div>
+    <script>
+        const graphData = {
+  "elements": {
+    "nodes": [
+      { "data": { "id": "com.github.sckwoky.typegraph.graph.TypeGraph", "label": "TypeGraph", "kind": "CLASS" } },
+      { "data": { "id": "Graph", "label": "Graph", "kind": "EXTERNAL" } },
+      { "data": { "id": "java.util.Map", "label": "Map", "kind": "EXTERNAL" } },
+      { "data": { "id": "java.lang.String", "label": "String", "kind": "EXTERNAL" } },
+      { "data": { "id": "com.github.sckwoky.typegraph.model.TypeKind", "label": "TypeKind", "kind": "ENUM" } },
+      { "data": { "id": "com.github.sckwoky.typegraph.model.TypeVertex", "label": "TypeVertex", "kind": "CLASS" } },
+      { "data": { "id": "com.github.sckwoky.typegraph.model.RelationshipKind", "label": "RelationshipKind", "kind": "ENUM" } },
+      { "data": { "id": "com.github.sckwoky.typegraph.model.MethodSignature", "label": "MethodSignature", "kind": "RECORD" } },
+      { "data": { "id": "com.github.sckwoky.typegraph.model.TypeRelationship", "label": "TypeRelationship", "kind": "CLASS" } },
+      { "data": { "id": "java.util.Optional", "label": "Optional", "kind": "EXTERNAL" } },
+      { "data": { "id": "java.util.Set", "label": "Set", "kind": "EXTERNAL" } },
+      { "data": { "id": "java.lang.Integer", "label": "Integer", "kind": "EXTERNAL" } },
+      { "data": { "id": "com.github.sckwoky.typegraph.graph.TypeGraphBuilder", "label": "TypeGraphBuilder", "kind": "CLASS" } },
+      { "data": { "id": "java.nio.file.Path", "label": "Path", "kind": "EXTERNAL" } },
+      { "data": { "id": "java.lang.Boolean", "label": "Boolean", "kind": "EXTERNAL" } },
+      { "data": { "id": "java.util.List", "label": "List", "kind": "EXTERNAL" } },
+      { "data": { "id": "ParserConfiguration", "label": "ParserConfiguration", "kind": "EXTERNAL" } },
+      { "data": { "id": "CompilationUnit", "label": "CompilationUnit", "kind": "EXTERNAL" } },
+      { "data": { "id": "com.github.sckwoky.typegraph.cli.Main", "label": "Main", "kind": "CLASS" } },
+      { "data": { "id": "java.util.concurrent.Callable", "label": "Callable", "kind": "EXTERNAL" } },
+      { "data": { "id": "com.github.sckwoky.typegraph.model.TypeNormalizer", "label": "TypeNormalizer", "kind": "CLASS" } },
+      { "data": { "id": "DefaultEdge", "label": "DefaultEdge", "kind": "EXTERNAL" } },
+      { "data": { "id": "java.lang.Object", "label": "Object", "kind": "EXTERNAL" } },
+      { "data": { "id": "com.github.sckwoky.typegraph.parsing.TypeRelationshipExtractor", "label": "TypeRelationshipExtractor", "kind": "CLASS" } },
+      { "data": { "id": "VoidVisitorAdapter", "label": "VoidVisitorAdapter", "kind": "EXTERNAL" } },
+      { "data": { "id": "com.github.sckwoky.typegraph.parsing.TypeRelationshipExtractor.ExtractedRelationship", "label": "ExtractedRelationship", "kind": "RECORD" } },
+      { "data": { "id": "ClassOrInterfaceDeclaration", "label": "ClassOrInterfaceDeclaration", "kind": "EXTERNAL" } },
+      { "data": { "id": "java.lang.Void", "label": "Void", "kind": "EXTERNAL" } },
+      { "data": { "id": "EnumDeclaration", "label": "EnumDeclaration", "kind": "EXTERNAL" } },
+      { "data": { "id": "RecordDeclaration", "label": "RecordDeclaration", "kind": "EXTERNAL" } },
+      { "data": { "id": "FieldDeclaration", "label": "FieldDeclaration", "kind": "EXTERNAL" } },
+      { "data": { "id": "MethodDeclaration", "label": "MethodDeclaration", "kind": "EXTERNAL" } },
+      { "data": { "id": "ConstructorDeclaration", "label": "ConstructorDeclaration", "kind": "EXTERNAL" } },
+      { "data": { "id": "TypeDeclaration", "label": "TypeDeclaration", "kind": "EXTERNAL" } },
+      { "data": { "id": "java.util.function.BiConsumer", "label": "BiConsumer", "kind": "EXTERNAL" } },
+      { "data": { "id": "BodyDeclaration", "label": "BodyDeclaration", "kind": "EXTERNAL" } },
+      { "data": { "id": "java.util.function.Consumer", "label": "Consumer", "kind": "EXTERNAL" } },
+      { "data": { "id": "ClassOrInterfaceType", "label": "ClassOrInterfaceType", "kind": "EXTERNAL" } },
+      { "data": { "id": "com.github.javaparser.ast.type.Type", "label": "Type", "kind": "EXTERNAL" } },
+      { "data": { "id": "ResolvedType", "label": "ResolvedType", "kind": "EXTERNAL" } },
+      { "data": { "id": "com.github.sckwoky.typegraph.parsing.SourceScanner", "label": "SourceScanner", "kind": "CLASS" } },
+      { "data": { "id": "com.github.sckwoky.typegraph.parsing.TypeSolverFactory", "label": "TypeSolverFactory", "kind": "CLASS" } },
+      { "data": { "id": "CombinedTypeSolver", "label": "CombinedTypeSolver", "kind": "EXTERNAL" } },
+      { "data": { "id": "java.util.stream.Stream", "label": "Stream", "kind": "EXTERNAL" } },
+      { "data": { "id": "com.github.sckwoky.typegraph.export.HtmlExporter", "label": "HtmlExporter", "kind": "CLASS" } },
+      { "data": { "id": "com.github.sckwoky.typegraph.export.DotExporter", "label": "DotExporter", "kind": "CLASS" } },
+      { "data": { "id": "java.io.Writer", "label": "Writer", "kind": "EXTERNAL" } },
+      { "data": { "id": "com.github.sckwoky.typegraph.export.JsonExporter", "label": "JsonExporter", "kind": "CLASS" } },
+      { "data": { "id": "com.github.sckwoky.typegraph.query.MethodChain", "label": "MethodChain", "kind": "RECORD" } },
+      { "data": { "id": "com.github.sckwoky.typegraph.query.ChainFinder", "label": "ChainFinder", "kind": "CLASS" } },
+      { "data": { "id": "com.github.sckwoky.typegraph.query.ChainFinder.DerivedEdge", "label": "DerivedEdge", "kind": "CLASS" } },
+      { "data": { "id": "DirectedMultigraph", "label": "DirectedMultigraph", "kind": "EXTERNAL" } }
+    ],
+    "edges": [
+      { "data": { "id": "e0", "source": "com.github.sckwoky.typegraph.graph.TypeGraph", "target": "Graph", "kind": "HAS", "label": "HAS" } },
+      { "data": { "id": "e1", "source": "com.github.sckwoky.typegraph.graph.TypeGraph", "target": "java.util.Map", "kind": "HAS", "label": "HAS" } },
+      { "data": { "id": "e2", "source": "com.github.sckwoky.typegraph.graph.TypeGraph", "target": "com.github.sckwoky.typegraph.graph.TypeGraph", "kind": "PRODUCES", "label": "<init>()" } },
+      { "data": { "id": "e3", "source": "java.lang.String", "target": "com.github.sckwoky.typegraph.graph.TypeGraph", "kind": "CONSUMES", "label": "getOrCreateVertex()" } },
+      { "data": { "id": "e4", "source": "com.github.sckwoky.typegraph.model.TypeKind", "target": "com.github.sckwoky.typegraph.graph.TypeGraph", "kind": "CONSUMES", "label": "getOrCreateVertex()" } },
+      { "data": { "id": "e5", "source": "com.github.sckwoky.typegraph.graph.TypeGraph", "target": "com.github.sckwoky.typegraph.model.TypeVertex", "kind": "PRODUCES", "label": "getOrCreateVertex()" } },
+      { "data": { "id": "e6", "source": "java.lang.String", "target": "com.github.sckwoky.typegraph.graph.TypeGraph", "kind": "CONSUMES", "label": "addRelationship()" } },
+      { "data": { "id": "e7", "source": "com.github.sckwoky.typegraph.model.TypeKind", "target": "com.github.sckwoky.typegraph.graph.TypeGraph", "kind": "CONSUMES", "label": "addRelationship()" } },
+      { "data": { "id": "e8", "source": "java.lang.String", "target": "com.github.sckwoky.typegraph.graph.TypeGraph", "kind": "CONSUMES", "label": "addRelationship()" } },
+      { "data": { "id": "e9", "source": "com.github.sckwoky.typegraph.model.TypeKind", "target": "com.github.sckwoky.typegraph.graph.TypeGraph", "kind": "CONSUMES", "label": "addRelationship()" } },
+      { "data": { "id": "e10", "source": "com.github.sckwoky.typegraph.model.RelationshipKind", "target": "com.github.sckwoky.typegraph.graph.TypeGraph", "kind": "CONSUMES", "label": "addRelationship()" } },
+      { "data": { "id": "e11", "source": "com.github.sckwoky.typegraph.model.MethodSignature", "target": "com.github.sckwoky.typegraph.graph.TypeGraph", "kind": "CONSUMES", "label": "addRelationship()" } },
+      { "data": { "id": "e12", "source": "com.github.sckwoky.typegraph.graph.TypeGraph", "target": "com.github.sckwoky.typegraph.model.TypeRelationship", "kind": "PRODUCES", "label": "addRelationship()" } },
+      { "data": { "id": "e13", "source": "com.github.sckwoky.typegraph.graph.TypeGraph", "target": "Graph", "kind": "PRODUCES", "label": "jgraphtGraph()" } },
+      { "data": { "id": "e14", "source": "java.lang.String", "target": "com.github.sckwoky.typegraph.graph.TypeGraph", "kind": "CONSUMES", "label": "findVertex()" } },
+      { "data": { "id": "e15", "source": "com.github.sckwoky.typegraph.graph.TypeGraph", "target": "java.util.Optional", "kind": "PRODUCES", "label": "findVertex()" } },
+      { "data": { "id": "e16", "source": "com.github.sckwoky.typegraph.graph.TypeGraph", "target": "java.util.Set", "kind": "PRODUCES", "label": "vertices()" } },
+      { "data": { "id": "e17", "source": "com.github.sckwoky.typegraph.graph.TypeGraph", "target": "java.util.Set", "kind": "PRODUCES", "label": "edges()" } },
+      { "data": { "id": "e18", "source": "com.github.sckwoky.typegraph.model.RelationshipKind", "target": "com.github.sckwoky.typegraph.graph.TypeGraph", "kind": "CONSUMES", "label": "edgesOf()" } },
+      { "data": { "id": "e19", "source": "com.github.sckwoky.typegraph.graph.TypeGraph", "target": "java.util.Set", "kind": "PRODUCES", "label": "edgesOf()" } },
+      { "data": { "id": "e20", "source": "com.github.sckwoky.typegraph.model.TypeRelationship", "target": "com.github.sckwoky.typegraph.graph.TypeGraph", "kind": "CONSUMES", "label": "getEdgeSource()" } },
+      { "data": { "id": "e21", "source": "com.github.sckwoky.typegraph.graph.TypeGraph", "target": "com.github.sckwoky.typegraph.model.TypeVertex", "kind": "PRODUCES", "label": "getEdgeSource()" } },
+      { "data": { "id": "e22", "source": "com.github.sckwoky.typegraph.model.TypeRelationship", "target": "com.github.sckwoky.typegraph.graph.TypeGraph", "kind": "CONSUMES", "label": "getEdgeTarget()" } },
+      { "data": { "id": "e23", "source": "com.github.sckwoky.typegraph.graph.TypeGraph", "target": "com.github.sckwoky.typegraph.model.TypeVertex", "kind": "PRODUCES", "label": "getEdgeTarget()" } },
+      { "data": { "id": "e24", "source": "com.github.sckwoky.typegraph.graph.TypeGraph", "target": "java.lang.Integer", "kind": "PRODUCES", "label": "vertexCount()" } },
+      { "data": { "id": "e25", "source": "com.github.sckwoky.typegraph.graph.TypeGraph", "target": "java.lang.Integer", "kind": "PRODUCES", "label": "edgeCount()" } },
+      { "data": { "id": "e26", "source": "com.github.sckwoky.typegraph.graph.TypeGraph", "target": "java.lang.String", "kind": "PRODUCES", "label": "summary()" } },
+      { "data": { "id": "e27", "source": "com.github.sckwoky.typegraph.graph.TypeGraphBuilder", "target": "java.nio.file.Path", "kind": "HAS", "label": "HAS" } },
+      { "data": { "id": "e28", "source": "com.github.sckwoky.typegraph.graph.TypeGraphBuilder", "target": "java.lang.Boolean", "kind": "HAS", "label": "HAS" } },
+      { "data": { "id": "e29", "source": "java.nio.file.Path", "target": "com.github.sckwoky.typegraph.graph.TypeGraphBuilder", "kind": "CONSUMES", "label": "<init>()" } },
+      { "data": { "id": "e30", "source": "com.github.sckwoky.typegraph.graph.TypeGraphBuilder", "target": "com.github.sckwoky.typegraph.graph.TypeGraphBuilder", "kind": "PRODUCES", "label": "<init>()" } },
+      { "data": { "id": "e31", "source": "java.lang.Boolean", "target": "com.github.sckwoky.typegraph.graph.TypeGraphBuilder", "kind": "CONSUMES", "label": "resolveJars()" } },
+      { "data": { "id": "e32", "source": "com.github.sckwoky.typegraph.graph.TypeGraphBuilder", "target": "com.github.sckwoky.typegraph.graph.TypeGraphBuilder", "kind": "PRODUCES", "label": "resolveJars()" } },
+      { "data": { "id": "e33", "source": "com.github.sckwoky.typegraph.graph.TypeGraphBuilder", "target": "com.github.sckwoky.typegraph.graph.TypeGraph", "kind": "PRODUCES", "label": "build()" } },
+      { "data": { "id": "e34", "source": "java.util.List", "target": "com.github.sckwoky.typegraph.graph.TypeGraphBuilder", "kind": "CONSUMES", "label": "buildFromSourceRoots()" } },
+      { "data": { "id": "e35", "source": "ParserConfiguration", "target": "com.github.sckwoky.typegraph.graph.TypeGraphBuilder", "kind": "CONSUMES", "label": "buildFromSourceRoots()" } },
+      { "data": { "id": "e36", "source": "com.github.sckwoky.typegraph.graph.TypeGraphBuilder", "target": "com.github.sckwoky.typegraph.graph.TypeGraph", "kind": "PRODUCES", "label": "buildFromSourceRoots()" } },
+      { "data": { "id": "e37", "source": "java.util.List", "target": "com.github.sckwoky.typegraph.graph.TypeGraphBuilder", "kind": "CONSUMES", "label": "doBuild()" } },
+      { "data": { "id": "e38", "source": "ParserConfiguration", "target": "com.github.sckwoky.typegraph.graph.TypeGraphBuilder", "kind": "CONSUMES", "label": "doBuild()" } },
+      { "data": { "id": "e39", "source": "com.github.sckwoky.typegraph.graph.TypeGraphBuilder", "target": "com.github.sckwoky.typegraph.graph.TypeGraph", "kind": "PRODUCES", "label": "doBuild()" } },
+      { "data": { "id": "e40", "source": "CompilationUnit", "target": "com.github.sckwoky.typegraph.graph.TypeGraphBuilder", "kind": "CONSUMES", "label": "extractRelationships()" } },
+      { "data": { "id": "e41", "source": "com.github.sckwoky.typegraph.graph.TypeGraph", "target": "com.github.sckwoky.typegraph.graph.TypeGraphBuilder", "kind": "CONSUMES", "label": "extractRelationships()" } },
+      { "data": { "id": "e42", "source": "CompilationUnit", "target": "com.github.sckwoky.typegraph.graph.TypeGraphBuilder", "kind": "CONSUMES", "label": "extractTypeKinds()" } },
+      { "data": { "id": "e43", "source": "com.github.sckwoky.typegraph.graph.TypeGraph", "target": "com.github.sckwoky.typegraph.graph.TypeGraphBuilder", "kind": "CONSUMES", "label": "extractTypeKinds()" } },
+      { "data": { "id": "e44", "source": "com.github.sckwoky.typegraph.cli.Main", "target": "java.util.concurrent.Callable", "kind": "IS", "label": "IS" } },
+      { "data": { "id": "e45", "source": "com.github.sckwoky.typegraph.cli.Main", "target": "java.nio.file.Path", "kind": "HAS", "label": "HAS" } },
+      { "data": { "id": "e46", "source": "com.github.sckwoky.typegraph.cli.Main", "target": "java.lang.String", "kind": "HAS", "label": "HAS" } },
+      { "data": { "id": "e47", "source": "com.github.sckwoky.typegraph.cli.Main", "target": "java.lang.String", "kind": "HAS", "label": "HAS" } },
+      { "data": { "id": "e48", "source": "com.github.sckwoky.typegraph.cli.Main", "target": "java.lang.Boolean", "kind": "HAS", "label": "HAS" } },
+      { "data": { "id": "e49", "source": "com.github.sckwoky.typegraph.cli.Main", "target": "java.lang.String", "kind": "HAS", "label": "HAS" } },
+      { "data": { "id": "e50", "source": "com.github.sckwoky.typegraph.cli.Main", "target": "java.lang.Integer", "kind": "HAS", "label": "HAS" } },
+      { "data": { "id": "e51", "source": "com.github.sckwoky.typegraph.cli.Main", "target": "java.lang.Integer", "kind": "PRODUCES", "label": "call()" } },
+      { "data": { "id": "e52", "source": "com.github.sckwoky.typegraph.graph.TypeGraph", "target": "com.github.sckwoky.typegraph.cli.Main", "kind": "CONSUMES", "label": "handleExport()" } },
+      { "data": { "id": "e53", "source": "com.github.sckwoky.typegraph.cli.Main", "target": "java.lang.Integer", "kind": "PRODUCES", "label": "handleExport()" } },
+      { "data": { "id": "e54", "source": "com.github.sckwoky.typegraph.graph.TypeGraph", "target": "com.github.sckwoky.typegraph.cli.Main", "kind": "CONSUMES", "label": "handleQuery()" } },
+      { "data": { "id": "e55", "source": "com.github.sckwoky.typegraph.cli.Main", "target": "java.lang.Integer", "kind": "PRODUCES", "label": "handleQuery()" } },
+      { "data": { "id": "e56", "source": "java.lang.String", "target": "com.github.sckwoky.typegraph.cli.Main", "kind": "CONSUMES", "label": "main()" } },
+      { "data": { "id": "e57", "source": "com.github.sckwoky.typegraph.model.MethodSignature", "target": "java.lang.String", "kind": "HAS", "label": "HAS" } },
+      { "data": { "id": "e58", "source": "com.github.sckwoky.typegraph.model.MethodSignature", "target": "java.lang.String", "kind": "HAS", "label": "HAS" } },
+      { "data": { "id": "e59", "source": "com.github.sckwoky.typegraph.model.MethodSignature", "target": "java.util.List", "kind": "HAS", "label": "HAS" } },
+      { "data": { "id": "e60", "source": "com.github.sckwoky.typegraph.model.MethodSignature", "target": "java.lang.String", "kind": "HAS", "label": "HAS" } },
+      { "data": { "id": "e61", "source": "java.lang.String", "target": "com.github.sckwoky.typegraph.model.MethodSignature", "kind": "CONSUMES", "label": "<init>()" } },
+      { "data": { "id": "e62", "source": "java.lang.String", "target": "com.github.sckwoky.typegraph.model.MethodSignature", "kind": "CONSUMES", "label": "<init>()" } },
+      { "data": { "id": "e63", "source": "java.util.List", "target": "com.github.sckwoky.typegraph.model.MethodSignature", "kind": "CONSUMES", "label": "<init>()" } },
+      { "data": { "id": "e64", "source": "java.lang.String", "target": "com.github.sckwoky.typegraph.model.MethodSignature", "kind": "CONSUMES", "label": "<init>()" } },
+      { "data": { "id": "e65", "source": "com.github.sckwoky.typegraph.model.MethodSignature", "target": "com.github.sckwoky.typegraph.model.MethodSignature", "kind": "PRODUCES", "label": "<init>()" } },
+      { "data": { "id": "e66", "source": "com.github.sckwoky.typegraph.model.MethodSignature", "target": "java.lang.String", "kind": "PRODUCES", "label": "toString()" } },
+      { "data": { "id": "e67", "source": "com.github.sckwoky.typegraph.model.TypeNormalizer", "target": "java.util.Map", "kind": "HAS", "label": "HAS" } },
+      { "data": { "id": "e68", "source": "com.github.sckwoky.typegraph.model.TypeNormalizer", "target": "com.github.sckwoky.typegraph.model.TypeNormalizer", "kind": "PRODUCES", "label": "<init>()" } },
+      { "data": { "id": "e69", "source": "java.lang.String", "target": "com.github.sckwoky.typegraph.model.TypeNormalizer", "kind": "CONSUMES", "label": "normalize()" } },
+      { "data": { "id": "e70", "source": "com.github.sckwoky.typegraph.model.TypeNormalizer", "target": "java.lang.String", "kind": "PRODUCES", "label": "normalize()" } },
+      { "data": { "id": "e71", "source": "com.github.sckwoky.typegraph.model.TypeRelationship", "target": "DefaultEdge", "kind": "IS", "label": "IS" } },
+      { "data": { "id": "e72", "source": "com.github.sckwoky.typegraph.model.TypeRelationship", "target": "com.github.sckwoky.typegraph.model.RelationshipKind", "kind": "HAS", "label": "HAS" } },
+      { "data": { "id": "e73", "source": "com.github.sckwoky.typegraph.model.TypeRelationship", "target": "com.github.sckwoky.typegraph.model.MethodSignature", "kind": "HAS", "label": "HAS" } },
+      { "data": { "id": "e74", "source": "com.github.sckwoky.typegraph.model.RelationshipKind", "target": "com.github.sckwoky.typegraph.model.TypeRelationship", "kind": "CONSUMES", "label": "<init>()" } },
+      { "data": { "id": "e75", "source": "com.github.sckwoky.typegraph.model.MethodSignature", "target": "com.github.sckwoky.typegraph.model.TypeRelationship", "kind": "CONSUMES", "label": "<init>()" } },
+      { "data": { "id": "e76", "source": "com.github.sckwoky.typegraph.model.TypeRelationship", "target": "com.github.sckwoky.typegraph.model.TypeRelationship", "kind": "PRODUCES", "label": "<init>()" } },
+      { "data": { "id": "e77", "source": "com.github.sckwoky.typegraph.model.RelationshipKind", "target": "com.github.sckwoky.typegraph.model.TypeRelationship", "kind": "CONSUMES", "label": "<init>()" } },
+      { "data": { "id": "e78", "source": "com.github.sckwoky.typegraph.model.TypeRelationship", "target": "com.github.sckwoky.typegraph.model.TypeRelationship", "kind": "PRODUCES", "label": "<init>()" } },
+      { "data": { "id": "e79", "source": "com.github.sckwoky.typegraph.model.TypeRelationship", "target": "com.github.sckwoky.typegraph.model.RelationshipKind", "kind": "PRODUCES", "label": "kind()" } },
+      { "data": { "id": "e80", "source": "com.github.sckwoky.typegraph.model.TypeRelationship", "target": "com.github.sckwoky.typegraph.model.MethodSignature", "kind": "PRODUCES", "label": "signature()" } },
+      { "data": { "id": "e81", "source": "com.github.sckwoky.typegraph.model.TypeRelationship", "target": "java.lang.String", "kind": "PRODUCES", "label": "toString()" } },
+      { "data": { "id": "e82", "source": "com.github.sckwoky.typegraph.model.TypeVertex", "target": "java.lang.String", "kind": "HAS", "label": "HAS" } },
+      { "data": { "id": "e83", "source": "com.github.sckwoky.typegraph.model.TypeVertex", "target": "com.github.sckwoky.typegraph.model.TypeKind", "kind": "HAS", "label": "HAS" } },
+      { "data": { "id": "e84", "source": "java.lang.String", "target": "com.github.sckwoky.typegraph.model.TypeVertex", "kind": "CONSUMES", "label": "<init>()" } },
+      { "data": { "id": "e85", "source": "com.github.sckwoky.typegraph.model.TypeKind", "target": "com.github.sckwoky.typegraph.model.TypeVertex", "kind": "CONSUMES", "label": "<init>()" } },
+      { "data": { "id": "e86", "source": "com.github.sckwoky.typegraph.model.TypeVertex", "target": "com.github.sckwoky.typegraph.model.TypeVertex", "kind": "PRODUCES", "label": "<init>()" } },
+      { "data": { "id": "e87", "source": "com.github.sckwoky.typegraph.model.TypeVertex", "target": "java.lang.String", "kind": "PRODUCES", "label": "fullyQualifiedName()" } },
+      { "data": { "id": "e88", "source": "com.github.sckwoky.typegraph.model.TypeVertex", "target": "com.github.sckwoky.typegraph.model.TypeKind", "kind": "PRODUCES", "label": "kind()" } },
+      { "data": { "id": "e89", "source": "com.github.sckwoky.typegraph.model.TypeKind", "target": "com.github.sckwoky.typegraph.model.TypeVertex", "kind": "CONSUMES", "label": "setKind()" } },
+      { "data": { "id": "e90", "source": "java.lang.Object", "target": "com.github.sckwoky.typegraph.model.TypeVertex", "kind": "CONSUMES", "label": "equals()" } },
+      { "data": { "id": "e91", "source": "com.github.sckwoky.typegraph.model.TypeVertex", "target": "java.lang.Boolean", "kind": "PRODUCES", "label": "equals()" } },
+      { "data": { "id": "e92", "source": "com.github.sckwoky.typegraph.model.TypeVertex", "target": "java.lang.Integer", "kind": "PRODUCES", "label": "hashCode()" } },
+      { "data": { "id": "e93", "source": "com.github.sckwoky.typegraph.model.TypeVertex", "target": "java.lang.String", "kind": "PRODUCES", "label": "toString()" } },
+      { "data": { "id": "e94", "source": "com.github.sckwoky.typegraph.parsing.TypeRelationshipExtractor", "target": "VoidVisitorAdapter", "kind": "IS", "label": "IS" } },
+      { "data": { "id": "e95", "source": "com.github.sckwoky.typegraph.parsing.TypeRelationshipExtractor", "target": "java.util.List", "kind": "HAS", "label": "HAS" } },
+      { "data": { "id": "e96", "source": "com.github.sckwoky.typegraph.parsing.TypeRelationshipExtractor.ExtractedRelationship", "target": "java.lang.String", "kind": "HAS", "label": "HAS" } },
+      { "data": { "id": "e97", "source": "com.github.sckwoky.typegraph.parsing.TypeRelationshipExtractor.ExtractedRelationship", "target": "java.lang.String", "kind": "HAS", "label": "HAS" } },
+      { "data": { "id": "e98", "source": "com.github.sckwoky.typegraph.parsing.TypeRelationshipExtractor.ExtractedRelationship", "target": "com.github.sckwoky.typegraph.model.RelationshipKind", "kind": "HAS", "label": "HAS" } },
+      { "data": { "id": "e99", "source": "com.github.sckwoky.typegraph.parsing.TypeRelationshipExtractor.ExtractedRelationship", "target": "com.github.sckwoky.typegraph.model.MethodSignature", "kind": "HAS", "label": "HAS" } },
+      { "data": { "id": "e100", "source": "java.lang.String", "target": "com.github.sckwoky.typegraph.parsing.TypeRelationshipExtractor.ExtractedRelationship", "kind": "CONSUMES", "label": "<init>()" } },
+      { "data": { "id": "e101", "source": "java.lang.String", "target": "com.github.sckwoky.typegraph.parsing.TypeRelationshipExtractor.ExtractedRelationship", "kind": "CONSUMES", "label": "<init>()" } },
+      { "data": { "id": "e102", "source": "com.github.sckwoky.typegraph.model.RelationshipKind", "target": "com.github.sckwoky.typegraph.parsing.TypeRelationshipExtractor.ExtractedRelationship", "kind": "CONSUMES", "label": "<init>()" } },
+      { "data": { "id": "e103", "source": "com.github.sckwoky.typegraph.model.MethodSignature", "target": "com.github.sckwoky.typegraph.parsing.TypeRelationshipExtractor.ExtractedRelationship", "kind": "CONSUMES", "label": "<init>()" } },
+      { "data": { "id": "e104", "source": "com.github.sckwoky.typegraph.parsing.TypeRelationshipExtractor.ExtractedRelationship", "target": "com.github.sckwoky.typegraph.parsing.TypeRelationshipExtractor.ExtractedRelationship", "kind": "PRODUCES", "label": "<init>()" } },
+      { "data": { "id": "e105", "source": "com.github.sckwoky.typegraph.parsing.TypeRelationshipExtractor", "target": "java.util.List", "kind": "PRODUCES", "label": "getRelationships()" } },
+      { "data": { "id": "e106", "source": "ClassOrInterfaceDeclaration", "target": "com.github.sckwoky.typegraph.parsing.TypeRelationshipExtractor", "kind": "CONSUMES", "label": "visit()" } },
+      { "data": { "id": "e107", "source": "java.lang.Void", "target": "com.github.sckwoky.typegraph.parsing.TypeRelationshipExtractor", "kind": "CONSUMES", "label": "visit()" } },
+      { "data": { "id": "e108", "source": "EnumDeclaration", "target": "com.github.sckwoky.typegraph.parsing.TypeRelationshipExtractor", "kind": "CONSUMES", "label": "visit()" } },
+      { "data": { "id": "e109", "source": "java.lang.Void", "target": "com.github.sckwoky.typegraph.parsing.TypeRelationshipExtractor", "kind": "CONSUMES", "label": "visit()" } },
+      { "data": { "id": "e110", "source": "RecordDeclaration", "target": "com.github.sckwoky.typegraph.parsing.TypeRelationshipExtractor", "kind": "CONSUMES", "label": "visit()" } },
+      { "data": { "id": "e111", "source": "java.lang.Void", "target": "com.github.sckwoky.typegraph.parsing.TypeRelationshipExtractor", "kind": "CONSUMES", "label": "visit()" } },
+      { "data": { "id": "e112", "source": "FieldDeclaration", "target": "com.github.sckwoky.typegraph.parsing.TypeRelationshipExtractor", "kind": "CONSUMES", "label": "visit()" } },
+      { "data": { "id": "e113", "source": "java.lang.Void", "target": "com.github.sckwoky.typegraph.parsing.TypeRelationshipExtractor", "kind": "CONSUMES", "label": "visit()" } },
+      { "data": { "id": "e114", "source": "MethodDeclaration", "target": "com.github.sckwoky.typegraph.parsing.TypeRelationshipExtractor", "kind": "CONSUMES", "label": "visit()" } },
+      { "data": { "id": "e115", "source": "java.lang.Void", "target": "com.github.sckwoky.typegraph.parsing.TypeRelationshipExtractor", "kind": "CONSUMES", "label": "visit()" } },
+      { "data": { "id": "e116", "source": "ConstructorDeclaration", "target": "com.github.sckwoky.typegraph.parsing.TypeRelationshipExtractor", "kind": "CONSUMES", "label": "visit()" } },
+      { "data": { "id": "e117", "source": "java.lang.Void", "target": "com.github.sckwoky.typegraph.parsing.TypeRelationshipExtractor", "kind": "CONSUMES", "label": "visit()" } },
+      { "data": { "id": "e118", "source": "TypeDeclaration", "target": "com.github.sckwoky.typegraph.parsing.TypeRelationshipExtractor", "kind": "CONSUMES", "label": "resolveDeclaringType()" } },
+      { "data": { "id": "e119", "source": "java.util.function.BiConsumer", "target": "com.github.sckwoky.typegraph.parsing.TypeRelationshipExtractor", "kind": "CONSUMES", "label": "resolveDeclaringType()" } },
+      { "data": { "id": "e120", "source": "BodyDeclaration", "target": "com.github.sckwoky.typegraph.parsing.TypeRelationshipExtractor", "kind": "CONSUMES", "label": "findEnclosingType()" } },
+      { "data": { "id": "e121", "source": "java.util.function.Consumer", "target": "com.github.sckwoky.typegraph.parsing.TypeRelationshipExtractor", "kind": "CONSUMES", "label": "findEnclosingType()" } },
+      { "data": { "id": "e122", "source": "ClassOrInterfaceType", "target": "com.github.sckwoky.typegraph.parsing.TypeRelationshipExtractor", "kind": "CONSUMES", "label": "resolveType()" } },
+      { "data": { "id": "e123", "source": "java.util.function.Consumer", "target": "com.github.sckwoky.typegraph.parsing.TypeRelationshipExtractor", "kind": "CONSUMES", "label": "resolveType()" } },
+      { "data": { "id": "e124", "source": "com.github.javaparser.ast.type.Type", "target": "com.github.sckwoky.typegraph.parsing.TypeRelationshipExtractor", "kind": "CONSUMES", "label": "resolveTypeFromNode()" } },
+      { "data": { "id": "e125", "source": "java.util.function.Consumer", "target": "com.github.sckwoky.typegraph.parsing.TypeRelationshipExtractor", "kind": "CONSUMES", "label": "resolveTypeFromNode()" } },
+      { "data": { "id": "e126", "source": "com.github.javaparser.ast.type.Type", "target": "com.github.sckwoky.typegraph.parsing.TypeRelationshipExtractor", "kind": "CONSUMES", "label": "resolveAndNormalize()" } },
+      { "data": { "id": "e127", "source": "com.github.sckwoky.typegraph.parsing.TypeRelationshipExtractor", "target": "java.lang.String", "kind": "PRODUCES", "label": "resolveAndNormalize()" } },
+      { "data": { "id": "e128", "source": "ResolvedType", "target": "com.github.sckwoky.typegraph.parsing.TypeRelationshipExtractor", "kind": "CONSUMES", "label": "extractFqn()" } },
+      { "data": { "id": "e129", "source": "com.github.sckwoky.typegraph.parsing.TypeRelationshipExtractor", "target": "java.lang.String", "kind": "PRODUCES", "label": "extractFqn()" } },
+      { "data": { "id": "e130", "source": "com.github.sckwoky.typegraph.parsing.SourceScanner", "target": "com.github.sckwoky.typegraph.parsing.SourceScanner", "kind": "PRODUCES", "label": "<init>()" } },
+      { "data": { "id": "e131", "source": "java.nio.file.Path", "target": "com.github.sckwoky.typegraph.parsing.SourceScanner", "kind": "CONSUMES", "label": "findJavaFiles()" } },
+      { "data": { "id": "e132", "source": "com.github.sckwoky.typegraph.parsing.SourceScanner", "target": "java.util.List", "kind": "PRODUCES", "label": "findJavaFiles()" } },
+      { "data": { "id": "e133", "source": "java.nio.file.Path", "target": "com.github.sckwoky.typegraph.parsing.SourceScanner", "kind": "CONSUMES", "label": "detectSourceRoots()" } },
+      { "data": { "id": "e134", "source": "com.github.sckwoky.typegraph.parsing.SourceScanner", "target": "java.util.List", "kind": "PRODUCES", "label": "detectSourceRoots()" } },
+      { "data": { "id": "e135", "source": "com.github.sckwoky.typegraph.parsing.TypeSolverFactory", "target": "com.github.sckwoky.typegraph.parsing.TypeSolverFactory", "kind": "PRODUCES", "label": "<init>()" } },
+      { "data": { "id": "e136", "source": "java.util.List", "target": "com.github.sckwoky.typegraph.parsing.TypeSolverFactory", "kind": "CONSUMES", "label": "create()" } },
+      { "data": { "id": "e137", "source": "java.util.List", "target": "com.github.sckwoky.typegraph.parsing.TypeSolverFactory", "kind": "CONSUMES", "label": "create()" } },
+      { "data": { "id": "e138", "source": "com.github.sckwoky.typegraph.parsing.TypeSolverFactory", "target": "CombinedTypeSolver", "kind": "PRODUCES", "label": "create()" } },
+      { "data": { "id": "e139", "source": "java.nio.file.Path", "target": "com.github.sckwoky.typegraph.parsing.TypeSolverFactory", "kind": "CONSUMES", "label": "findGradleJars()" } },
+      { "data": { "id": "e140", "source": "com.github.sckwoky.typegraph.parsing.TypeSolverFactory", "target": "java.util.List", "kind": "PRODUCES", "label": "findGradleJars()" } },
+      { "data": { "id": "e141", "source": "java.nio.file.Path", "target": "com.github.sckwoky.typegraph.parsing.TypeSolverFactory", "kind": "CONSUMES", "label": "resolveGradleClasspath()" } },
+      { "data": { "id": "e142", "source": "com.github.sckwoky.typegraph.parsing.TypeSolverFactory", "target": "java.util.List", "kind": "PRODUCES", "label": "resolveGradleClasspath()" } },
+      { "data": { "id": "e143", "source": "java.nio.file.Path", "target": "com.github.sckwoky.typegraph.parsing.TypeSolverFactory", "kind": "CONSUMES", "label": "findJarsIn()" } },
+      { "data": { "id": "e144", "source": "com.github.sckwoky.typegraph.parsing.TypeSolverFactory", "target": "java.util.stream.Stream", "kind": "PRODUCES", "label": "findJarsIn()" } },
+      { "data": { "id": "e145", "source": "com.github.sckwoky.typegraph.graph.TypeGraph", "target": "com.github.sckwoky.typegraph.export.HtmlExporter", "kind": "CONSUMES", "label": "export()" } },
+      { "data": { "id": "e146", "source": "java.nio.file.Path", "target": "com.github.sckwoky.typegraph.export.HtmlExporter", "kind": "CONSUMES", "label": "export()" } },
+      { "data": { "id": "e147", "source": "com.github.sckwoky.typegraph.export.DotExporter", "target": "java.util.Map", "kind": "HAS", "label": "HAS" } },
+      { "data": { "id": "e148", "source": "com.github.sckwoky.typegraph.export.DotExporter", "target": "java.util.Map", "kind": "HAS", "label": "HAS" } },
+      { "data": { "id": "e149", "source": "com.github.sckwoky.typegraph.export.DotExporter", "target": "java.util.Map", "kind": "HAS", "label": "HAS" } },
+      { "data": { "id": "e150", "source": "com.github.sckwoky.typegraph.graph.TypeGraph", "target": "com.github.sckwoky.typegraph.export.DotExporter", "kind": "CONSUMES", "label": "export()" } },
+      { "data": { "id": "e151", "source": "java.nio.file.Path", "target": "com.github.sckwoky.typegraph.export.DotExporter", "kind": "CONSUMES", "label": "export()" } },
+      { "data": { "id": "e152", "source": "com.github.sckwoky.typegraph.graph.TypeGraph", "target": "com.github.sckwoky.typegraph.export.DotExporter", "kind": "CONSUMES", "label": "export()" } },
+      { "data": { "id": "e153", "source": "java.io.Writer", "target": "com.github.sckwoky.typegraph.export.DotExporter", "kind": "CONSUMES", "label": "export()" } },
+      { "data": { "id": "e154", "source": "java.lang.String", "target": "com.github.sckwoky.typegraph.export.DotExporter", "kind": "CONSUMES", "label": "shortName()" } },
+      { "data": { "id": "e155", "source": "com.github.sckwoky.typegraph.export.DotExporter", "target": "java.lang.String", "kind": "PRODUCES", "label": "shortName()" } },
+      { "data": { "id": "e156", "source": "java.lang.String", "target": "com.github.sckwoky.typegraph.export.DotExporter", "kind": "CONSUMES", "label": "escDot()" } },
+      { "data": { "id": "e157", "source": "com.github.sckwoky.typegraph.export.DotExporter", "target": "java.lang.String", "kind": "PRODUCES", "label": "escDot()" } },
+      { "data": { "id": "e158", "source": "com.github.sckwoky.typegraph.graph.TypeGraph", "target": "com.github.sckwoky.typegraph.export.JsonExporter", "kind": "CONSUMES", "label": "export()" } },
+      { "data": { "id": "e159", "source": "java.nio.file.Path", "target": "com.github.sckwoky.typegraph.export.JsonExporter", "kind": "CONSUMES", "label": "export()" } },
+      { "data": { "id": "e160", "source": "com.github.sckwoky.typegraph.graph.TypeGraph", "target": "com.github.sckwoky.typegraph.export.JsonExporter", "kind": "CONSUMES", "label": "export()" } },
+      { "data": { "id": "e161", "source": "java.io.Writer", "target": "com.github.sckwoky.typegraph.export.JsonExporter", "kind": "CONSUMES", "label": "export()" } },
+      { "data": { "id": "e162", "source": "java.lang.String", "target": "com.github.sckwoky.typegraph.export.JsonExporter", "kind": "CONSUMES", "label": "shortName()" } },
+      { "data": { "id": "e163", "source": "com.github.sckwoky.typegraph.export.JsonExporter", "target": "java.lang.String", "kind": "PRODUCES", "label": "shortName()" } },
+      { "data": { "id": "e164", "source": "java.lang.String", "target": "com.github.sckwoky.typegraph.export.JsonExporter", "kind": "CONSUMES", "label": "escJson()" } },
+      { "data": { "id": "e165", "source": "com.github.sckwoky.typegraph.export.JsonExporter", "target": "java.lang.String", "kind": "PRODUCES", "label": "escJson()" } },
+      { "data": { "id": "e166", "source": "com.github.sckwoky.typegraph.query.MethodChain", "target": "java.util.List", "kind": "HAS", "label": "HAS" } },
+      { "data": { "id": "e167", "source": "com.github.sckwoky.typegraph.query.MethodChain", "target": "java.util.List", "kind": "HAS", "label": "HAS" } },
+      { "data": { "id": "e168", "source": "com.github.sckwoky.typegraph.query.MethodChain", "target": "java.lang.String", "kind": "HAS", "label": "HAS" } },
+      { "data": { "id": "e169", "source": "java.util.List", "target": "com.github.sckwoky.typegraph.query.MethodChain", "kind": "CONSUMES", "label": "<init>()" } },
+      { "data": { "id": "e170", "source": "java.util.List", "target": "com.github.sckwoky.typegraph.query.MethodChain", "kind": "CONSUMES", "label": "<init>()" } },
+      { "data": { "id": "e171", "source": "java.lang.String", "target": "com.github.sckwoky.typegraph.query.MethodChain", "kind": "CONSUMES", "label": "<init>()" } },
+      { "data": { "id": "e172", "source": "com.github.sckwoky.typegraph.query.MethodChain", "target": "com.github.sckwoky.typegraph.query.MethodChain", "kind": "PRODUCES", "label": "<init>()" } },
+      { "data": { "id": "e173", "source": "com.github.sckwoky.typegraph.query.MethodChain", "target": "java.lang.String", "kind": "PRODUCES", "label": "toString()" } },
+      { "data": { "id": "e174", "source": "com.github.sckwoky.typegraph.query.ChainFinder", "target": "com.github.sckwoky.typegraph.graph.TypeGraph", "kind": "HAS", "label": "HAS" } },
+      { "data": { "id": "e175", "source": "com.github.sckwoky.typegraph.query.ChainFinder", "target": "java.lang.Integer", "kind": "HAS", "label": "HAS" } },
+      { "data": { "id": "e176", "source": "com.github.sckwoky.typegraph.query.ChainFinder.DerivedEdge", "target": "DefaultEdge", "kind": "IS", "label": "IS" } },
+      { "data": { "id": "e177", "source": "com.github.sckwoky.typegraph.query.ChainFinder.DerivedEdge", "target": "com.github.sckwoky.typegraph.model.MethodSignature", "kind": "HAS", "label": "HAS" } },
+      { "data": { "id": "e178", "source": "com.github.sckwoky.typegraph.model.MethodSignature", "target": "com.github.sckwoky.typegraph.query.ChainFinder.DerivedEdge", "kind": "CONSUMES", "label": "<init>()" } },
+      { "data": { "id": "e179", "source": "com.github.sckwoky.typegraph.query.ChainFinder.DerivedEdge", "target": "com.github.sckwoky.typegraph.query.ChainFinder.DerivedEdge", "kind": "PRODUCES", "label": "<init>()" } },
+      { "data": { "id": "e180", "source": "com.github.sckwoky.typegraph.graph.TypeGraph", "target": "com.github.sckwoky.typegraph.query.ChainFinder", "kind": "CONSUMES", "label": "<init>()" } },
+      { "data": { "id": "e181", "source": "java.lang.Integer", "target": "com.github.sckwoky.typegraph.query.ChainFinder", "kind": "CONSUMES", "label": "<init>()" } },
+      { "data": { "id": "e182", "source": "com.github.sckwoky.typegraph.query.ChainFinder", "target": "com.github.sckwoky.typegraph.query.ChainFinder", "kind": "PRODUCES", "label": "<init>()" } },
+      { "data": { "id": "e183", "source": "com.github.sckwoky.typegraph.graph.TypeGraph", "target": "com.github.sckwoky.typegraph.query.ChainFinder", "kind": "CONSUMES", "label": "<init>()" } },
+      { "data": { "id": "e184", "source": "com.github.sckwoky.typegraph.query.ChainFinder", "target": "com.github.sckwoky.typegraph.query.ChainFinder", "kind": "PRODUCES", "label": "<init>()" } },
+      { "data": { "id": "e185", "source": "java.util.List", "target": "com.github.sckwoky.typegraph.query.ChainFinder", "kind": "CONSUMES", "label": "findChains()" } },
+      { "data": { "id": "e186", "source": "java.lang.String", "target": "com.github.sckwoky.typegraph.query.ChainFinder", "kind": "CONSUMES", "label": "findChains()" } },
+      { "data": { "id": "e187", "source": "com.github.sckwoky.typegraph.query.ChainFinder", "target": "java.util.List", "kind": "PRODUCES", "label": "findChains()" } },
+      { "data": { "id": "e188", "source": "com.github.sckwoky.typegraph.query.ChainFinder", "target": "DirectedMultigraph", "kind": "PRODUCES", "label": "buildDerivedGraph()" } }
+    ]
+  }
+}
+;
+        const edgeColors = { IS: '#3498db', HAS: '#2ecc71', CONSUMES: '#e67e22', PRODUCES: '#e74c3c' };
+        const nodeColors = { CLASS: '#d5e8d4', INTERFACE: '#dae8fc', ENUM: '#fff2cc', RECORD: '#e1d5e7', ANNOTATION: '#f8cecc', EXTERNAL: '#f5f5f5' };
+
+        const cy = cytoscape({
+            container: document.getElementById('cy'),
+            elements: graphData.elements,
+            style: [
+                { selector: 'node', style: {
+                    'label': 'data(label)', 'text-valign': 'center', 'text-halign': 'center',
+                    'background-color': function(ele) { return nodeColors[ele.data('kind')] || '#f5f5f5'; },
+                    'border-width': 1, 'border-color': '#999', 'font-size': '11px',
+                    'width': 'label', 'height': 'label', 'padding': '8px', 'shape': 'roundrectangle'
+                }},
+                { selector: 'edge', style: {
+                    'width': 2, 'target-arrow-shape': 'triangle', 'curve-style': 'bezier',
+                    'line-color': function(ele) { return edgeColors[ele.data('kind')] || '#999'; },
+                    'target-arrow-color': function(ele) { return edgeColors[ele.data('kind')] || '#999'; },
+                    'label': 'data(label)', 'font-size': '9px', 'text-rotation': 'autorotate',
+                    'text-margin-y': -10
+                }},
+                { selector: '.highlighted', style: { 'border-width': 3, 'border-color': '#e74c3c' }},
+                { selector: '.faded', style: { 'opacity': 0.15 }},
+                { selector: '.hidden', style: { 'display': 'none' }}
+            ],
+            layout: { name: 'cose', animate: false, nodeRepulsion: 8000, idealEdgeLength: 120 }
+        });
+
+        // Search
+        document.getElementById('search').addEventListener('input', function(e) {
+            const q = e.target.value.toLowerCase();
+            cy.elements().removeClass('faded highlighted');
+            if (!q) return;
+            cy.nodes().forEach(n => {
+                if (n.data('id').toLowerCase().includes(q) || n.data('label').toLowerCase().includes(q)) {
+                    n.addClass('highlighted');
+                } else {
+                    n.addClass('faded');
+                }
+            });
+            cy.edges().addClass('faded');
+            cy.nodes('.highlighted').connectedEdges().removeClass('faded');
+        });
+
+        // Edge filters
+        document.querySelectorAll('.edge-filter').forEach(cb => {
+            cb.addEventListener('change', function() {
+                const checked = Array.from(document.querySelectorAll('.edge-filter:checked')).map(c => c.value);
+                cy.edges().forEach(e => {
+                    if (checked.includes(e.data('kind'))) {
+                        e.removeClass('hidden');
+                    } else {
+                        e.addClass('hidden');
+                    }
+                });
+            });
+        });
+
+        // Click info
+        const infoDiv = document.getElementById('info');
+        cy.on('tap', 'node', function(evt) {
+            const n = evt.target;
+            const edges = n.connectedEdges();
+            let html = '<b>' + n.data('id') + '</b> [' + n.data('kind') + ']<br>';
+            html += 'Edges: ' + edges.length + '<br>';
+            const counts = {};
+            edges.forEach(e => { counts[e.data('kind')] = (counts[e.data('kind')]||0) + 1; });
+            for (const [k,v] of Object.entries(counts)) html += '  ' + k + ': ' + v + '<br>';
+            infoDiv.innerHTML = html;
+            infoDiv.style.display = 'block';
+        });
+        cy.on('tap', function(evt) { if (evt.target === cy) infoDiv.style.display = 'none'; });
+    </script>
+</body>
+</html>
