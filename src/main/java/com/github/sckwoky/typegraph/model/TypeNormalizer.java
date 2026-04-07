@@ -3,7 +3,12 @@ package com.github.sckwoky.typegraph.model;
 import java.util.Map;
 
 /**
- * Normalizes type names: primitives → wrappers, strips array brackets, etc.
+ * Normalizes raw (non-generic) type names: primitives → wrappers, void → null.
+ * <p>
+ * This class handles only simple type name normalization.
+ * All generic type information must be extracted from the AST via
+ * {@link com.github.javaparser.resolution.types.ResolvedType} API,
+ * never from string parsing.
  */
 public final class TypeNormalizer {
 
@@ -21,12 +26,16 @@ public final class TypeNormalizer {
     private TypeNormalizer() {}
 
     /**
-     * Normalizes a type name:
+     * Normalizes a raw type name (without generics):
      * <ul>
      *   <li>Primitives are mapped to their wrapper types</li>
-     *   <li>Generic type parameters are stripped ({@code List<String>} → {@code java.util.List})</li>
      *   <li>{@code void} returns {@code null} (not a valid vertex)</li>
+     *   <li>All other names pass through unchanged</li>
      * </ul>
+     * <p>
+     * This method must only be called with simple/raw type names.
+     * Generic type parameters are handled exclusively via the JavaParser
+     * {@code ResolvedType} AST API in {@code TypeRelationshipExtractor}.
      *
      * @return normalized FQN, or null if the type should not be a vertex (e.g. void)
      */
@@ -37,19 +46,6 @@ public final class TypeNormalizer {
 
         String name = typeName.strip();
 
-        // Strip generic parameters: "java.util.List<java.lang.String>" → "java.util.List"
-        int angleBracket = name.indexOf('<');
-        if (angleBracket > 0) {
-            name = name.substring(0, angleBracket);
-        }
-
-        // Strip array dimensions: "int[]" → "int", "String[][]" → "String"
-        int bracket = name.indexOf('[');
-        if (bracket > 0) {
-            name = name.substring(0, bracket);
-        }
-
-        // Primitive → wrapper
         String wrapper = PRIMITIVES_TO_WRAPPERS.get(name);
         if (wrapper != null) {
             return wrapper;

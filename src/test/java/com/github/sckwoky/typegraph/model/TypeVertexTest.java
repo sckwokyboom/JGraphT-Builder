@@ -27,4 +27,28 @@ class TypeVertexTest {
         v.setKind(TypeKind.CLASS);
         assertThat(v.kind()).isEqualTo(TypeKind.CLASS);
     }
+
+    @Test
+    void shortNameSimple() {
+        var v = new TypeVertex("com.example.Foo", TypeKind.CLASS);
+        assertThat(v.shortName()).isEqualTo("Foo");
+    }
+
+    @Test
+    void shortNameWithGenerics() {
+        var v = new TypeVertex("java.util.List<java.lang.String>", TypeKind.EXTERNAL);
+        assertThat(v.shortName()).isEqualTo("List<String>");
+    }
+
+    @Test
+    void shortNameWithNestedGenerics() {
+        var v = new TypeVertex("java.util.Map<java.lang.String, java.util.List<java.lang.Integer>>", TypeKind.EXTERNAL);
+        assertThat(v.shortName()).isEqualTo("Map<String, List<Integer>>");
+    }
+
+    @Test
+    void shortNameWithMultipleTypeArgs() {
+        var v = new TypeVertex("java.util.Map<java.lang.String, java.lang.Integer>", TypeKind.EXTERNAL);
+        assertThat(v.shortName()).isEqualTo("Map<String, Integer>");
+    }
 }

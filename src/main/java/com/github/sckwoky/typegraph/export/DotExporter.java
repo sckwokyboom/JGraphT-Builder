@@ -62,9 +62,8 @@ public class DotExporter {
         // Vertices
         for (var vertex : graph.vertices()) {
             var color = VERTEX_COLORS.getOrDefault(vertex.kind(), "#f5f5f5");
-            var shortName = shortName(vertex.fullyQualifiedName());
             writer.write("  \"%s\" [label=\"%s\", fillcolor=\"%s\", tooltip=\"%s\"];\n"
-                    .formatted(escDot(vertex.fullyQualifiedName()), escDot(shortName),
+                    .formatted(escDot(vertex.fullyQualifiedName()), escDot(vertex.shortName()),
                             color, escDot(vertex.fullyQualifiedName())));
         }
         writer.write("\n");
@@ -84,11 +83,6 @@ public class DotExporter {
         }
 
         writer.write("}\n");
-    }
-
-    private static String shortName(String fqn) {
-        int dot = fqn.lastIndexOf('.');
-        return dot >= 0 ? fqn.substring(dot + 1) : fqn;
     }
 
     private static String escDot(String s) {

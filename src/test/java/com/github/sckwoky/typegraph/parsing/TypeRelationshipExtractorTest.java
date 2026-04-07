@@ -101,4 +101,23 @@ class TypeRelationshipExtractorTest {
                         && r.signature().declaringType().equals("com.example.Dog"))
                 .anyMatch(r -> r.sourceType().equals("java.lang.Integer"));
     }
+
+    @Test
+    void genericsPreservedInFieldTypes() {
+        // Owner has List<Dog> field
+        assertThat(allRelationships)
+                .filteredOn(r -> r.kind() == RelationshipKind.HAS
+                        && r.sourceType().equals("com.example.Owner"))
+                .anyMatch(r -> r.targetType().equals("java.util.List<com.example.Dog>"));
+    }
+
+    @Test
+    void genericsPreservedInReturnTypes() {
+        // Owner.getDogs() → List<Dog>
+        assertThat(allRelationships)
+                .filteredOn(r -> r.kind() == RelationshipKind.PRODUCES
+                        && r.signature() != null
+                        && r.signature().methodName().equals("getDogs"))
+                .anyMatch(r -> r.targetType().equals("java.util.List<com.example.Dog>"));
+    }
 }

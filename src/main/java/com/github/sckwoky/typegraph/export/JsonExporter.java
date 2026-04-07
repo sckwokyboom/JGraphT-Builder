@@ -24,9 +24,8 @@ public class JsonExporter {
         var vertices = graph.vertices().stream().toList();
         for (int i = 0; i < vertices.size(); i++) {
             var v = vertices.get(i);
-            var shortName = shortName(v.fullyQualifiedName());
             writer.write("      { \"data\": { \"id\": \"%s\", \"label\": \"%s\", \"kind\": \"%s\" } }"
-                    .formatted(escJson(v.fullyQualifiedName()), escJson(shortName), v.kind().name()));
+                    .formatted(escJson(v.fullyQualifiedName()), escJson(v.shortName()), v.kind().name()));
             if (i < vertices.size() - 1) writer.write(",");
             writer.write("\n");
         }
@@ -49,11 +48,6 @@ public class JsonExporter {
         }
 
         writer.write("    ]\n  }\n}\n");
-    }
-
-    private static String shortName(String fqn) {
-        int dot = fqn.lastIndexOf('.');
-        return dot >= 0 ? fqn.substring(dot + 1) : fqn;
     }
 
     private static String escJson(String s) {

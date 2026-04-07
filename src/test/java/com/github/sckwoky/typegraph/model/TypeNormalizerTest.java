@@ -14,6 +14,10 @@ class TypeNormalizerTest {
             "boolean, java.lang.Boolean",
             "double, java.lang.Double",
             "char, java.lang.Character",
+            "byte, java.lang.Byte",
+            "short, java.lang.Short",
+            "long, java.lang.Long",
+            "float, java.lang.Float",
     })
     void primitivesNormalizedToWrappers(String input, String expected) {
         assertThat(TypeNormalizer.normalize(input)).isEqualTo(expected);
@@ -32,19 +36,8 @@ class TypeNormalizerTest {
     }
 
     @Test
-    void genericsStripped() {
-        assertThat(TypeNormalizer.normalize("java.util.List<java.lang.String>"))
-                .isEqualTo("java.util.List");
-    }
-
-    @Test
-    void arrayDimensionsStripped() {
-        assertThat(TypeNormalizer.normalize("java.lang.String[]")).isEqualTo("java.lang.String");
-        assertThat(TypeNormalizer.normalize("int[]")).isEqualTo("java.lang.Integer");
-    }
-
-    @Test
     void regularTypesPassThrough() {
         assertThat(TypeNormalizer.normalize("com.example.Foo")).isEqualTo("com.example.Foo");
+        assertThat(TypeNormalizer.normalize("java.lang.String")).isEqualTo("java.lang.String");
     }
 }

@@ -1,3 +1,9 @@
 .venv
 .idea
 build/*
+typegraph.html
+typegraph.dot
+typegraph.json
+graph.html
+projects/*
+.gradle/*
