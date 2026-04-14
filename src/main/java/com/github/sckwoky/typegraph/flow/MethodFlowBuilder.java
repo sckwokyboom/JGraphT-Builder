@@ -1,0 +1,700 @@
+package com.github.sckwoky.typegraph.flow;
+
+import com.github.javaparser.ast.body.*;
+import com.github.javaparser.ast.expr.*;
+import com.github.javaparser.ast.stmt.*;
+import com.github.sckwoky.typegraph.flow.model.*;
+import com.github.sckwoky.typegraph.model.MethodSignature;
+
+import java.util.*;
+
+/**
+ * Builds a {@link MethodFlowGraph} from a {@link MethodDeclaration} or
+ * {@link ConstructorDeclaration} body.
+ * <p>
+ * Maintains an SSA-lite scope ({@link VariableState}) and an enclosing-control
+ * stack so that every non-control node is tagged with its dominating BRANCH or
+ * LOOP id ({@link FlowNode#enclosingControlId()}). The {@link BackwardSlicer}
+ * uses these tags to include control nodes in a slice only when they actually
+ * dominate a data-relevant node.
+ *
+ * <h2>Documented limitations</h2>
+ * <ul>
+ *   <li>Loops are processed once; loop-carried dependencies are approximated
+ *       by a single phi merge of pre- and post-iteration versions.</li>
+ *   <li>Try/catch is conservatively over-approximated: every catch branch is
+ *       reachable from the try entry.</li>
+ *   <li>No alias analysis: {@code var d = this.field; modify(d);} does not link
+ *       {@code d} back to {@code this.field}.</li>
+ *   <li>Lambda bodies are opaque; the lambda itself becomes a single CALL-like
+ *       node with {@link CallResolution#UNRESOLVED}.</li>
+ *   <li>Arrays are monolithic; element-wise tracking is not modeled.</li>
+ * </ul>
+ */
+public class MethodFlowBuilder {
+
+    private final FieldIndex fields;
+    private final String declaringTypeFqn;
+    private MethodFlowGraph graph;
+    private VariableState scope;
+    private final Deque<String> enclosingControlStack = new ArrayDeque<>();
+    private FlowNode thisRef;
+
+    public MethodFlowBuilder(String declaringTypeFqn, FieldIndex fields) {
+        this.declaringTypeFqn = declaringTypeFqn;
+        this.fields = fields;
+    }
+
+    // ─── Entry points ───────────────────────────────────────────────────
+
+    public MethodFlowGraph build(MethodDeclaration md) {
+        var sig = signatureOf(md);
+        graph = new MethodFlowGraph(sig);
+        scope = new VariableState();
+        if (!md.isStatic()) {
+            thisRef = mkNode(FlowNodeKind.THIS_REF, "this", lineOf(md), declaringTypeFqn,
+                    null, -1, null, null, null, ControlSubtype.NONE);
+        }
+        for (var p : md.getParameters()) {
+            int idx = md.getParameters().indexOf(p);
+            var pn = mkNode(FlowNodeKind.PARAM, "param " + p.getNameAsString(),
+                    lineOf(p), p.getType().asString(),
+                    p.getNameAsString(), 0, null, null, null, ControlSubtype.NONE);
+            scope.define(p.getNameAsString(), pn);
+        }
+        md.getBody().ifPresent(this::processBlock);
+        return graph;
+    }
+
+    public MethodFlowGraph build(ConstructorDeclaration cd) {
+        var sig = signatureOf(cd);
+        graph = new MethodFlowGraph(sig);
+        scope = new VariableState();
+        thisRef = mkNode(FlowNodeKind.THIS_REF, "this", lineOf(cd), declaringTypeFqn,
+                null, -1, null, null, null, ControlSubtype.NONE);
+        for (var p : cd.getParameters()) {
+            var pn = mkNode(FlowNodeKind.PARAM, "param " + p.getNameAsString(),
+                    lineOf(p), p.getType().asString(),
+                    p.getNameAsString(), 0, null, null, null, ControlSubtype.NONE);
+            scope.define(p.getNameAsString(), pn);
+        }
+        processBlock(cd.getBody());
+        return graph;
+    }
+
+    // ─── Statement dispatch ─────────────────────────────────────────────
+
+    private void processBlock(BlockStmt block) {
+        scope.pushFrame();
+        try {
+            for (var s : block.getStatements()) {
+                processStmt(s);
+            }
+        } finally {
+            scope.popFrame();
+        }
+    }
+
+    private void processStmt(Statement s) {
+        if (s instanceof ExpressionStmt es) {
+            analyzeExpr(es.getExpression());
+        } else if (s instanceof ReturnStmt rs) {
+            processReturn(rs);
+        } else if (s instanceof IfStmt is) {
+            processIf(is);
+        } else if (s instanceof BlockStmt bs) {
+            processBlock(bs);
+        } else if (s instanceof WhileStmt ws) {
+            processWhile(ws);
+        } else if (s instanceof DoStmt ds) {
+            processDo(ds);
+        } else if (s instanceof ForStmt fs) {
+            processFor(fs);
+        } else if (s instanceof ForEachStmt fes) {
+            processForEach(fes);
+        } else if (s instanceof TryStmt ts) {
+            processTry(ts);
+        } else if (s instanceof SwitchStmt ss) {
+            processSwitch(ss);
+        } else if (s instanceof ThrowStmt ths) {
+            analyzeExpr(ths.getExpression());
+        } else if (s instanceof SynchronizedStmt ss) {
+            analyzeExpr(ss.getExpression());
+            processBlock(ss.getBody());
+        } else if (s instanceof LabeledStmt ls) {
+            processStmt(ls.getStatement());
+        } else if (s instanceof AssertStmt as) {
+            analyzeExpr(as.getCheck());
+            as.getMessage().ifPresent(this::analyzeExpr);
+        }
+        // BreakStmt, ContinueStmt, EmptyStmt, LocalClassDeclarationStmt, etc. → ignored
+    }
+
+    // ─── Control flow ───────────────────────────────────────────────────
+
+    private void processReturn(ReturnStmt rs) {
+        var ret = mkNode(FlowNodeKind.RETURN, "return", lineOf(rs), null,
+                null, -1, null, null, null, ControlSubtype.NONE);
+        rs.getExpression().ifPresent(expr -> {
+            var val = analyzeExpr(expr);
+            if (val != null) graph.addEdge(val, ret, FlowEdgeKind.RETURN_DEP);
+        });
+    }
+
+    private void processIf(IfStmt is) {
+        var condVal = analyzeExpr(is.getCondition());
+        var branch = mkControl(FlowNodeKind.BRANCH, ControlSubtype.IF, "if");
+        if (condVal != null) graph.addEdge(condVal, branch, FlowEdgeKind.DATA_DEP, "cond");
+
+        var before = scope.snapshot();
+        enclosingControlStack.push(branch.id());
+
+        // then
+        scope.pushFrame();
+        processStmt(is.getThenStmt());
+        var thenSnap = scope.snapshot();
+        scope.popFrame();
+        scope.restoreFromSnapshot(before);
+
+        // else
+        Map<String, FlowNode> elseSnap;
+        if (is.getElseStmt().isPresent()) {
+            scope.pushFrame();
+            processStmt(is.getElseStmt().get());
+            elseSnap = scope.snapshot();
+            scope.popFrame();
+            scope.restoreFromSnapshot(before);
+        } else {
+            elseSnap = before;
+        }
+
+        enclosingControlStack.pop();
+
+        var merge = mkControl(FlowNodeKind.MERGE, ControlSubtype.IF, "merge");
+        graph.addEdge(branch, merge, FlowEdgeKind.CONTROL_DEP);
+        mergeBranches(before, List.of(thenSnap, elseSnap), merge);
+    }
+
+    private void processWhile(WhileStmt ws) {
+        var loop = mkControl(FlowNodeKind.LOOP, ControlSubtype.WHILE, "while");
+        var cond = analyzeExpr(ws.getCondition());
+        if (cond != null) graph.addEdge(cond, loop, FlowEdgeKind.DATA_DEP, "cond");
+
+        var before = scope.snapshot();
+        enclosingControlStack.push(loop.id());
+        scope.pushFrame();
+        processStmt(ws.getBody());
+        var after = scope.snapshot();
+        scope.popFrame();
+        enclosingControlStack.pop();
+        scope.restoreFromSnapshot(before);
+
+        mergeBranches(before, List.of(before, after), loop);
+    }
+
+    private void processDo(DoStmt ds) {
+        var loop = mkControl(FlowNodeKind.LOOP, ControlSubtype.DO, "do-while");
+        var before = scope.snapshot();
+        enclosingControlStack.push(loop.id());
+        scope.pushFrame();
+        processStmt(ds.getBody());
+        var after = scope.snapshot();
+        scope.popFrame();
+        enclosingControlStack.pop();
+
+        var cond = analyzeExpr(ds.getCondition());
+        if (cond != null) graph.addEdge(cond, loop, FlowEdgeKind.DATA_DEP, "cond");
+
+        scope.restoreFromSnapshot(before);
+        mergeBranches(before, List.of(before, after), loop);
+    }
+
+    private void processFor(ForStmt fs) {
+        scope.pushFrame();
+        for (var init : fs.getInitialization()) analyzeExpr(init);
+        var loop = mkControl(FlowNodeKind.LOOP, ControlSubtype.FOR, "for");
+        fs.getCompare().ifPresent(c -> {
+            var cond = analyzeExpr(c);
+            if (cond != null) graph.addEdge(cond, loop, FlowEdgeKind.DATA_DEP, "cond");
+        });
+
+        var before = scope.snapshot();
+        enclosingControlStack.push(loop.id());
+        scope.pushFrame();
+        processStmt(fs.getBody());
+        for (var upd : fs.getUpdate()) analyzeExpr(upd);
+        var after = scope.snapshot();
+        scope.popFrame();
+        enclosingControlStack.pop();
+        scope.restoreFromSnapshot(before);
+        mergeBranches(before, List.of(before, after), loop);
+
+        scope.popFrame();
+    }
+
+    private void processForEach(ForEachStmt fes) {
+        var loop = mkControl(FlowNodeKind.LOOP, ControlSubtype.FOREACH, "foreach");
+        var iter = analyzeExpr(fes.getIterable());
+        if (iter != null) graph.addEdge(iter, loop, FlowEdgeKind.DATA_DEP, "iterable");
+
+        var before = scope.snapshot();
+        enclosingControlStack.push(loop.id());
+        scope.pushFrame();
+
+        for (var v : fes.getVariable().getVariables()) {
+            var loopVar = mkNode(FlowNodeKind.LOCAL_DEF, v.getNameAsString(),
+                    lineOf(fes), v.getType().asString(),
+                    v.getNameAsString(), scope.nextVersion(v.getNameAsString()),
+                    null, null, null, ControlSubtype.NONE);
+            if (iter != null) graph.addEdge(iter, loopVar, FlowEdgeKind.DATA_DEP, "iter-elem");
+            scope.define(v.getNameAsString(), loopVar);
+        }
+
+        processStmt(fes.getBody());
+        var after = scope.snapshot();
+
+        scope.popFrame();
+        enclosingControlStack.pop();
+        scope.restoreFromSnapshot(before);
+        mergeBranches(before, List.of(before, after), loop);
+    }
+
+    private void processTry(TryStmt ts) {
+        var tryNode = mkControl(FlowNodeKind.BRANCH, ControlSubtype.TRY, "try");
+        enclosingControlStack.push(tryNode.id());
+        var before = scope.snapshot();
+
+        scope.pushFrame();
+        processBlock(ts.getTryBlock());
+        var trySnap = scope.snapshot();
+        scope.popFrame();
+        scope.restoreFromSnapshot(before);
+
+        var allSnaps = new ArrayList<Map<String, FlowNode>>();
+        allSnaps.add(trySnap);
+
+        for (var cc : ts.getCatchClauses()) {
+            var catchNode = mkControl(FlowNodeKind.BRANCH, ControlSubtype.CATCH,
+                    "catch " + cc.getParameter().getType().asString());
+            graph.addEdge(tryNode, catchNode, FlowEdgeKind.CONTROL_DEP);
+            enclosingControlStack.push(catchNode.id());
+            scope.pushFrame();
+
+            var p = cc.getParameter();
+            var catchParam = mkNode(FlowNodeKind.PARAM, "catch " + p.getNameAsString(),
+                    lineOf(p), p.getType().asString(),
+                    p.getNameAsString(), 0, null, null, null, ControlSubtype.NONE);
+            scope.define(p.getNameAsString(), catchParam);
+
+            processBlock(cc.getBody());
+            allSnaps.add(scope.snapshot());
+
+            scope.popFrame();
+            enclosingControlStack.pop();
+            scope.restoreFromSnapshot(before);
+        }
+
+        enclosingControlStack.pop();
+
+        var merge = mkControl(FlowNodeKind.MERGE, ControlSubtype.TRY, "try-merge");
+        graph.addEdge(tryNode, merge, FlowEdgeKind.CONTROL_DEP);
+        mergeBranches(before, allSnaps, merge);
+
+        if (ts.getFinallyBlock().isPresent()) {
+            var fin = mkControl(FlowNodeKind.BRANCH, ControlSubtype.FINALLY, "finally");
+            graph.addEdge(merge, fin, FlowEdgeKind.CONTROL_DEP);
+            enclosingControlStack.push(fin.id());
+            scope.pushFrame();
+            processBlock(ts.getFinallyBlock().get());
+            scope.popFrame();
+            enclosingControlStack.pop();
+        }
+    }
+
+    private void processSwitch(SwitchStmt ss) {
+        var sel = analyzeExpr(ss.getSelector());
+        var branch = mkControl(FlowNodeKind.BRANCH, ControlSubtype.SWITCH, "switch");
+        if (sel != null) graph.addEdge(sel, branch, FlowEdgeKind.DATA_DEP, "selector");
+
+        var before = scope.snapshot();
+        enclosingControlStack.push(branch.id());
+
+        var caseSnaps = new ArrayList<Map<String, FlowNode>>();
+        for (var entry : ss.getEntries()) {
+            scope.pushFrame();
+            for (var stmt : entry.getStatements()) processStmt(stmt);
+            caseSnaps.add(scope.snapshot());
+            scope.popFrame();
+            scope.restoreFromSnapshot(before);
+        }
+
+        enclosingControlStack.pop();
+
+        var merge = mkControl(FlowNodeKind.MERGE, ControlSubtype.SWITCH, "switch-merge");
+        graph.addEdge(branch, merge, FlowEdgeKind.CONTROL_DEP);
+        if (caseSnaps.isEmpty()) caseSnaps.add(before);
+        mergeBranches(before, caseSnaps, merge);
+    }
+
+    // ─── Phi merging ────────────────────────────────────────────────────
+
+    private void mergeBranches(Map<String, FlowNode> before,
+                               List<Map<String, FlowNode>> branchSnaps,
+                               FlowNode controlMerge) {
+        var changed = new LinkedHashSet<String>();
+        for (var snap : branchSnaps) {
+            for (var entry : snap.entrySet()) {
+                var beforeDef = before.get(entry.getKey());
+                if (beforeDef != entry.getValue()) changed.add(entry.getKey());
+            }
+        }
+        for (var name : changed) {
+            String typeFqn = null;
+            for (var snap : branchSnaps) {
+                var v = snap.getOrDefault(name, before.get(name));
+                if (v != null && v.typeFqn() != null) { typeFqn = v.typeFqn(); break; }
+            }
+            var phi = mkNode(FlowNodeKind.MERGE_VALUE, "phi(" + name + ")", -1, typeFqn,
+                    name, scope.nextVersion(name), null, null, null, ControlSubtype.NONE);
+            graph.addEdge(controlMerge, phi, FlowEdgeKind.CONTROL_DEP);
+            for (var snap : branchSnaps) {
+                var src = snap.getOrDefault(name, before.get(name));
+                if (src != null) graph.addEdge(src, phi, FlowEdgeKind.PHI_INPUT);
+            }
+            scope.update(name, phi);
+        }
+    }
+
+    // ─── Expression analysis ────────────────────────────────────────────
+
+    private FlowNode analyzeExpr(Expression expr) {
+        if (expr == null) return null;
+
+        if (expr instanceof NameExpr ne) return analyzeName(ne);
+        if (expr instanceof FieldAccessExpr fae) return analyzeFieldAccess(fae);
+        if (expr instanceof ThisExpr) return ensureThisRef();
+        if (expr instanceof SuperExpr) return ensureThisRef();
+        if (expr instanceof MethodCallExpr mce) return analyzeMethodCall(mce);
+        if (expr instanceof ObjectCreationExpr oce) return analyzeObjectCreation(oce);
+        if (expr instanceof AssignExpr ae) return analyzeAssign(ae);
+        if (expr instanceof VariableDeclarationExpr vde) return analyzeVarDecl(vde);
+        if (expr instanceof BinaryExpr be) return analyzeBinary(be);
+        if (expr instanceof UnaryExpr ue) {
+            var inner = analyzeExpr(ue.getExpression());
+            return mkTemp("op " + ue.getOperator(), inner != null ? inner.typeFqn() : null, inner);
+        }
+        if (expr instanceof CastExpr ce) {
+            var inner = analyzeExpr(ce.getExpression());
+            return mkTemp("(" + ce.getType().asString() + ")", ce.getType().asString(), inner);
+        }
+        if (expr instanceof EnclosedExpr ee) return analyzeExpr(ee.getInner());
+        if (expr instanceof ConditionalExpr ce) return analyzeTernary(ce);
+        if (expr instanceof LiteralExpr le) {
+            return mkNode(FlowNodeKind.LITERAL, le.toString(), lineOf(le),
+                    null, null, -1, null, null, null, ControlSubtype.NONE);
+        }
+        if (expr instanceof ArrayAccessExpr aae) {
+            var arr = analyzeExpr(aae.getName());
+            var idx = analyzeExpr(aae.getIndex());
+            return mkTemp("arr[idx]", null, arr, idx);
+        }
+        if (expr instanceof InstanceOfExpr ioe) {
+            var inner = analyzeExpr(ioe.getExpression());
+            return mkTemp("instanceof " + ioe.getType().asString(), "boolean", inner);
+        }
+        if (expr instanceof LambdaExpr || expr instanceof MethodReferenceExpr) {
+            var label = expr instanceof LambdaExpr ? "lambda" : "method-ref";
+            return mkNode(FlowNodeKind.CALL, label, lineOf(expr), null,
+                    null, -1, null, CallResolution.UNRESOLVED, null, ControlSubtype.NONE);
+        }
+        if (expr instanceof ArrayCreationExpr ace) {
+            var t = mkTemp("new " + ace.getElementType().asString() + "[]",
+                    ace.getElementType().asString());
+            return t;
+        }
+        // Fallback
+        return mkTemp("expr:" + expr.getClass().getSimpleName(), null);
+    }
+
+    private FlowNode analyzeName(NameExpr ne) {
+        String name = ne.getNameAsString();
+        var current = scope.currentDef(name);
+        if (current != null) return current;
+        if (fields.contains(name)) {
+            var fr = mkNode(FlowNodeKind.FIELD_READ, "this." + name, lineOf(ne),
+                    fields.typeOf(name), name, -1, null, null,
+                    FieldOrigin.THIS, ControlSubtype.NONE);
+            // Wire receiver
+            if (thisRef != null) graph.addEdge(thisRef, fr, FlowEdgeKind.DATA_DEP, "this");
+            return fr;
+        }
+        // Unknown reference: model as a TEMP_EXPR placeholder
+        return mkTemp("ref:" + name, null);
+    }
+
+    private FlowNode analyzeFieldAccess(FieldAccessExpr fae) {
+        FieldOrigin origin = FieldOrigin.OTHER;
+        FlowNode receiver = null;
+        if (fae.getScope() instanceof ThisExpr) {
+            origin = FieldOrigin.THIS;
+            receiver = ensureThisRef();
+        } else if (fae.getScope() instanceof NameExpr neScope) {
+            // could be ClassName.STATIC or var.field — best effort
+            if (Character.isUpperCase(neScope.getNameAsString().charAt(0))
+                    && scope.currentDef(neScope.getNameAsString()) == null) {
+                origin = FieldOrigin.STATIC;
+            } else {
+                receiver = analyzeExpr(neScope);
+            }
+        } else {
+            receiver = analyzeExpr(fae.getScope());
+        }
+        var fr = mkNode(FlowNodeKind.FIELD_READ, fae.getNameAsString(),
+                lineOf(fae), null, fae.getNameAsString(), -1, null, null, origin, ControlSubtype.NONE);
+        if (receiver != null) graph.addEdge(receiver, fr, FlowEdgeKind.DATA_DEP, "receiver");
+        return fr;
+    }
+
+    private FlowNode analyzeMethodCall(MethodCallExpr mce) {
+        // Receiver
+        FlowNode receiver = mce.getScope().map(this::analyzeExpr).orElse(null);
+
+        // Args
+        var args = new ArrayList<FlowNode>();
+        for (var a : mce.getArguments()) args.add(analyzeExpr(a));
+
+        // Resolution
+        MethodSignature sig = null;
+        CallResolution res = CallResolution.UNRESOLVED;
+        String returnType = null;
+        try {
+            var resolved = mce.resolve();
+            var paramTypes = new ArrayList<String>();
+            for (int i = 0; i < resolved.getNumberOfParams(); i++) {
+                paramTypes.add(resolved.getParam(i).getType().describe());
+            }
+            String declaring = resolved.declaringType().getQualifiedName();
+            returnType = resolved.getReturnType().describe();
+            sig = new MethodSignature(declaring, resolved.getName(), paramTypes, returnType);
+            res = CallResolution.RESOLVED;
+        } catch (Throwable t) {
+            res = CallResolution.UNRESOLVED;
+        }
+
+        var call = mkNode(FlowNodeKind.CALL, mce.getNameAsString() + "()", lineOf(mce),
+                returnType, null, -1, sig, res, null, ControlSubtype.NONE);
+
+        if (receiver != null) graph.addEdge(receiver, call, FlowEdgeKind.ARG_PASS, "receiver");
+        for (int i = 0; i < args.size(); i++) {
+            if (args.get(i) != null) {
+                graph.addEdge(args.get(i), call, FlowEdgeKind.ARG_PASS, "arg[" + i + "]");
+            }
+        }
+
+        var result = mkNode(FlowNodeKind.CALL_RESULT, mce.getNameAsString() + "→",
+                lineOf(mce), returnType, null, -1, sig, res, null, ControlSubtype.NONE);
+        graph.addEdge(call, result, FlowEdgeKind.CALL_RESULT_OF);
+        return result;
+    }
+
+    private FlowNode analyzeObjectCreation(ObjectCreationExpr oce) {
+        var args = new ArrayList<FlowNode>();
+        for (var a : oce.getArguments()) args.add(analyzeExpr(a));
+
+        MethodSignature sig = null;
+        CallResolution res = CallResolution.UNRESOLVED;
+        String returnType = oce.getType().asString();
+        try {
+            var resolved = oce.resolve();
+            var paramTypes = new ArrayList<String>();
+            for (int i = 0; i < resolved.getNumberOfParams(); i++) {
+                paramTypes.add(resolved.getParam(i).getType().describe());
+            }
+            String declaring = resolved.declaringType().getQualifiedName();
+            returnType = declaring;
+            sig = new MethodSignature(declaring, "<init>", paramTypes, declaring);
+            res = CallResolution.RESOLVED;
+        } catch (Throwable t) {
+            res = CallResolution.UNRESOLVED;
+        }
+
+        var call = mkNode(FlowNodeKind.CALL, "new " + oce.getType().asString(), lineOf(oce),
+                returnType, null, -1, sig, res, null, ControlSubtype.NONE);
+        for (int i = 0; i < args.size(); i++) {
+            if (args.get(i) != null) graph.addEdge(args.get(i), call, FlowEdgeKind.ARG_PASS, "arg[" + i + "]");
+        }
+        var result = mkNode(FlowNodeKind.CALL_RESULT, oce.getType().asString(),
+                lineOf(oce), returnType, null, -1, sig, res, null, ControlSubtype.NONE);
+        graph.addEdge(call, result, FlowEdgeKind.CALL_RESULT_OF);
+        return result;
+    }
+
+    private FlowNode analyzeAssign(AssignExpr ae) {
+        var rhs = analyzeExpr(ae.getValue());
+        var target = ae.getTarget();
+        if (target instanceof NameExpr ne) {
+            String name = ne.getNameAsString();
+            if (scope.currentDef(name) != null || !fields.contains(name)) {
+                var def = mkNode(FlowNodeKind.LOCAL_DEF, name + ":=", lineOf(ae),
+                        rhs != null ? rhs.typeFqn() : null,
+                        name, scope.nextVersion(name), null, null, null, ControlSubtype.NONE);
+                if (rhs != null) graph.addEdge(rhs, def, FlowEdgeKind.DATA_DEP, "value");
+                scope.update(name, def);
+                return def;
+            } else {
+                var fw = mkNode(FlowNodeKind.FIELD_WRITE, "this." + name + ":=",
+                        lineOf(ae), fields.typeOf(name), name, -1, null, null,
+                        FieldOrigin.THIS, ControlSubtype.NONE);
+                if (thisRef != null) graph.addEdge(thisRef, fw, FlowEdgeKind.DATA_DEP, "this");
+                if (rhs != null) graph.addEdge(rhs, fw, FlowEdgeKind.DATA_DEP, "value");
+                return fw;
+            }
+        }
+        if (target instanceof FieldAccessExpr fae) {
+            FieldOrigin origin = fae.getScope() instanceof ThisExpr ? FieldOrigin.THIS : FieldOrigin.OTHER;
+            FlowNode receiver = fae.getScope() instanceof ThisExpr ? ensureThisRef() : analyzeExpr(fae.getScope());
+            var fw = mkNode(FlowNodeKind.FIELD_WRITE, fae.getNameAsString() + ":=",
+                    lineOf(ae), null, fae.getNameAsString(), -1, null, null, origin, ControlSubtype.NONE);
+            if (receiver != null) graph.addEdge(receiver, fw, FlowEdgeKind.DATA_DEP, "receiver");
+            if (rhs != null) graph.addEdge(rhs, fw, FlowEdgeKind.DATA_DEP, "value");
+            return fw;
+        }
+        if (target instanceof ArrayAccessExpr aae) {
+            var arr = analyzeExpr(aae.getName());
+            if (rhs != null && arr != null) graph.addEdge(rhs, arr, FlowEdgeKind.DATA_DEP, "elem");
+            return rhs;
+        }
+        return rhs;
+    }
+
+    private FlowNode analyzeVarDecl(VariableDeclarationExpr vde) {
+        FlowNode last = null;
+        for (var v : vde.getVariables()) {
+            var name = v.getNameAsString();
+            FlowNode init = v.getInitializer().map(this::analyzeExpr).orElse(null);
+            var def = mkNode(FlowNodeKind.LOCAL_DEF, name + " :=", lineOf(v),
+                    v.getType().asString(),
+                    name, scope.nextVersion(name), null, null, null, ControlSubtype.NONE);
+            if (init != null) graph.addEdge(init, def, FlowEdgeKind.DATA_DEP, "init");
+            scope.define(name, def);
+            last = def;
+        }
+        return last;
+    }
+
+    private FlowNode analyzeBinary(BinaryExpr be) {
+        var l = analyzeExpr(be.getLeft());
+        var r = analyzeExpr(be.getRight());
+        return mkTemp("op " + be.getOperator(), null, l, r);
+    }
+
+    private FlowNode analyzeTernary(ConditionalExpr ce) {
+        var cond = analyzeExpr(ce.getCondition());
+        var branch = mkControl(FlowNodeKind.BRANCH, ControlSubtype.TERNARY, "?:");
+        if (cond != null) graph.addEdge(cond, branch, FlowEdgeKind.DATA_DEP, "cond");
+
+        var before = scope.snapshot();
+        enclosingControlStack.push(branch.id());
+
+        scope.pushFrame();
+        var thenVal = analyzeExpr(ce.getThenExpr());
+        var thenSnap = scope.snapshot();
+        scope.popFrame();
+        scope.restoreFromSnapshot(before);
+
+        scope.pushFrame();
+        var elseVal = analyzeExpr(ce.getElseExpr());
+        var elseSnap = scope.snapshot();
+        scope.popFrame();
+        scope.restoreFromSnapshot(before);
+
+        enclosingControlStack.pop();
+
+        var merge = mkControl(FlowNodeKind.MERGE, ControlSubtype.TERNARY, "?:-merge");
+        graph.addEdge(branch, merge, FlowEdgeKind.CONTROL_DEP);
+        mergeBranches(before, List.of(thenSnap, elseSnap), merge);
+
+        // Phi for the result of the ternary itself
+        var phi = mkNode(FlowNodeKind.MERGE_VALUE, "phi(?:)", lineOf(ce),
+                thenVal != null ? thenVal.typeFqn() : null, null, -1,
+                null, null, null, ControlSubtype.NONE);
+        graph.addEdge(merge, phi, FlowEdgeKind.CONTROL_DEP);
+        if (thenVal != null) graph.addEdge(thenVal, phi, FlowEdgeKind.PHI_INPUT, "then");
+        if (elseVal != null) graph.addEdge(elseVal, phi, FlowEdgeKind.PHI_INPUT, "else");
+        return phi;
+    }
+
+    // ─── Helpers ────────────────────────────────────────────────────────
+
+    private FlowNode ensureThisRef() {
+        if (thisRef == null) {
+            thisRef = mkNode(FlowNodeKind.THIS_REF, "this", -1, declaringTypeFqn,
+                    null, -1, null, null, null, ControlSubtype.NONE);
+        }
+        return thisRef;
+    }
+
+    private FlowNode mkTemp(String label, String typeFqn, FlowNode... sources) {
+        var temp = mkNode(FlowNodeKind.TEMP_EXPR, label, -1, typeFqn,
+                null, -1, null, null, null, ControlSubtype.NONE);
+        for (var s : sources) {
+            if (s != null) graph.addEdge(s, temp, FlowEdgeKind.DATA_DEP);
+        }
+        return temp;
+    }
+
+    private FlowNode mkControl(FlowNodeKind kind, ControlSubtype subtype, String label) {
+        return mkNode(kind, label, -1, null, null, -1, null, null, null, subtype);
+    }
+
+    private FlowNode mkNode(FlowNodeKind kind, String label, int line,
+                            String typeFqn, String varName, int varVersion,
+                            MethodSignature sig, CallResolution res,
+                            FieldOrigin origin, ControlSubtype subtype) {
+        var node = new FlowNode(graph.nextId(prefixOf(kind)), kind, label, line,
+                typeFqn, varName, varVersion, sig, res, origin, subtype, currentEnclosing());
+        graph.addNode(node);
+        return node;
+    }
+
+    private String prefixOf(FlowNodeKind kind) {
+        return switch (kind) {
+            case PARAM -> "param";
+            case THIS_REF -> "this";
+            case FIELD_READ -> "fr";
+            case FIELD_WRITE -> "fw";
+            case LOCAL_DEF -> "def";
+            case LOCAL_USE -> "use";
+            case TEMP_EXPR -> "tmp";
+            case MERGE_VALUE -> "phi";
+            case CALL -> "call";
+            case CALL_RESULT -> "res";
+            case RETURN -> "ret";
+            case BRANCH -> "br";
+            case MERGE -> "mrg";
+            case LOOP -> "loop";
+            case LITERAL -> "lit";
+        };
+    }
+
+    private String currentEnclosing() {
+        return enclosingControlStack.isEmpty() ? null : enclosingControlStack.peek();
+    }
+
+    private static int lineOf(com.github.javaparser.ast.Node n) {
+        return n.getBegin().map(p -> p.line).orElse(-1);
+    }
+
+    private MethodSignature signatureOf(MethodDeclaration md) {
+        var paramTypes = new ArrayList<String>();
+        for (var p : md.getParameters()) paramTypes.add(p.getType().asString());
+        return new MethodSignature(declaringTypeFqn, md.getNameAsString(),
+                paramTypes, md.getType().asString());
+    }
+
+    private MethodSignature signatureOf(ConstructorDeclaration cd) {
+        var paramTypes = new ArrayList<String>();
+        for (var p : cd.getParameters()) paramTypes.add(p.getType().asString());
+        return new MethodSignature(declaringTypeFqn, "<init>", paramTypes, declaringTypeFqn);
+    }
+}

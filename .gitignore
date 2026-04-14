@@ -7,3 +7,4 @@ typegraph.json
 graph.html
 projects/*
 .gradle/*
+typegraph/*
