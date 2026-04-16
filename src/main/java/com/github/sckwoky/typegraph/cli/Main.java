@@ -2,9 +2,16 @@ package com.github.sckwoky.typegraph.cli;
 
 import com.github.sckwoky.typegraph.compose.*;
 import com.github.sckwoky.typegraph.export.*;
+import com.github.sckwoky.typegraph.flow.FlowGraphService;
 import com.github.sckwoky.typegraph.flow.ProjectFlowGraphs;
+import com.github.sckwoky.typegraph.flow.jdt.JdtEnvironment;
+import com.github.sckwoky.typegraph.flow.jdt.JdtMethodBodyAnalyzer;
+import com.github.sckwoky.typegraph.flow.jdt.JdtSourceIndexer;
+import com.github.sckwoky.typegraph.flow.spi.SourceIndexer;
+import com.github.sckwoky.typegraph.flow.ts.TreeSitterSourceIndexer;
 import com.github.sckwoky.typegraph.graph.TypeGraphBuilder;
 import com.github.sckwoky.typegraph.parsing.SourceScanner;
+import com.github.sckwoky.typegraph.parsing.TypeSolverFactory;
 import com.github.sckwoky.typegraph.query.ChainFinder;
 import picocli.CommandLine;
 import picocli.CommandLine.Command;
@@ -94,27 +101,44 @@ public class Main implements Callable<Integer> {
 
     private int handleFlowGraphs() throws Exception {
         var sourceRoots = SourceScanner.detectSourceRoots(projectDir);
-        var typeSolver = com.github.sckwoky.typegraph.parsing.TypeSolverFactory.create(
-                sourceRoots,
-                noJars ? java.util.List.<Path>of()
-                        : com.github.sckwoky.typegraph.parsing.TypeSolverFactory.resolveGradleClasspath(projectDir));
-        var config = new com.github.javaparser.ParserConfiguration()
-                .setLanguageLevel(com.github.javaparser.ParserConfiguration.LanguageLevel.BLEEDING_EDGE)
-                .setSymbolResolver(new com.github.javaparser.symbolsolver.JavaSymbolSolver(typeSolver));
-        com.github.javaparser.StaticJavaParser.setConfiguration(config);
+
+        // Resolve classpath for JDT binding resolution
+        List<Path> classpath = noJars
+                ? List.of()
+                : TypeSolverFactory.resolveGradleClasspath(projectDir);
+
+        // Set up JDT environment
+        var jdtEnv = new JdtEnvironment(sourceRoots, classpath);
+
+        // Try tree-sitter indexer; fall back to JDT indexer
+        SourceIndexer indexer = TreeSitterSourceIndexer.tryCreate()
+                .orElseGet(() -> new JdtSourceIndexer(jdtEnv));
+
+        var analyzer = new JdtMethodBodyAnalyzer(jdtEnv);
 
         java.util.function.Predicate<String> scopePredicate = scope == null || scope.isEmpty()
                 ? t -> true
                 : t -> t.equals(scope) || t.startsWith(scope + ".");
 
-        var scanner = new ProjectFlowGraphs();
-        var entries = scanner.buildAll(sourceRoots, scopePredicate);
-        System.out.println("Built flow graphs for " + entries.size() + " methods" +
+        var service = new FlowGraphService(indexer, analyzer);
+        var serviceEntries = service.buildAll(sourceRoots, scopePredicate);
+
+        System.out.println("Built flow graphs for " + serviceEntries.size() + " methods" +
                 (scope != null ? " (scope: " + scope + ")" : ""));
-        if (entries.isEmpty()) {
+        if (serviceEntries.isEmpty()) {
             System.err.println("No methods to export. Try removing --scope or check the project path.");
             return 1;
         }
+
+        // Convert FlowGraphService.Entry -> ProjectFlowGraphs.Entry for FlowHtmlExporter
+        List<ProjectFlowGraphs.Entry> entries = serviceEntries.stream()
+                .map(e -> new ProjectFlowGraphs.Entry(
+                        e.declaringType(),
+                        e.methodName(),
+                        e.displayName(),
+                        e.packageName(),
+                        e.graph()))
+                .toList();
 
         String base = output == null || output.isEmpty() ? "flow" : output;
         Path outputDir = Path.of(base);
