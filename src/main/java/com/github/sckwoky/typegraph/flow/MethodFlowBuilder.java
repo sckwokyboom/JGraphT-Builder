@@ -26,8 +26,7 @@ import java.util.*;
  *       reachable from the try entry.</li>
  *   <li>No alias analysis: {@code var d = this.field; modify(d);} does not link
  *       {@code d} back to {@code this.field}.</li>
- *   <li>Lambda bodies are opaque; the lambda itself becomes a single CALL-like
- *       node with {@link CallResolution#UNRESOLVED}.</li>
+ *   <li>Lambda bodies are opaque; the lambda itself becomes a LAMBDA node.</li>
  *   <li>Arrays are monolithic; element-wise tracking is not modeled.</li>
  * </ul>
  */
@@ -39,6 +38,7 @@ public class MethodFlowBuilder {
     private VariableState scope;
     private final Deque<String> enclosingControlStack = new ArrayDeque<>();
     private FlowNode thisRef;
+    private FlowNode superRef;
     private int stmtCounter = 0;
 
     public MethodFlowBuilder(String declaringTypeFqn, FieldIndex fields) {
@@ -375,7 +375,7 @@ public class MethodFlowBuilder {
         if (expr instanceof NameExpr ne) return analyzeName(ne);
         if (expr instanceof FieldAccessExpr fae) return analyzeFieldAccess(fae);
         if (expr instanceof ThisExpr) return ensureThisRef();
-        if (expr instanceof SuperExpr) return ensureThisRef();
+        if (expr instanceof SuperExpr) return ensureSuperRef();
         if (expr instanceof MethodCallExpr mce) return analyzeMethodCall(mce);
         if (expr instanceof ObjectCreationExpr oce) return analyzeObjectCreation(oce);
         if (expr instanceof AssignExpr ae) return analyzeAssign(ae);
@@ -386,21 +386,11 @@ public class MethodFlowBuilder {
         if (expr instanceof EnclosedExpr ee) return analyzeExpr(ee.getInner());
         if (expr instanceof ConditionalExpr ce) return analyzeTernary(ce);
         if (expr instanceof LiteralExpr le) return analyzeLiteral(le);
-        if (expr instanceof ArrayAccessExpr aae) {
-            var arr = analyzeExpr(aae.getName());
-            var idx = analyzeExpr(aae.getIndex());
-            return mkTemp("arr[idx]", null, arr, idx);
-        }
+        if (expr instanceof ArrayAccessExpr aae) return analyzeArrayAccess(aae);
         if (expr instanceof InstanceOfExpr ioe) return analyzeInstanceOf(ioe);
-        if (expr instanceof LambdaExpr || expr instanceof MethodReferenceExpr) {
-            var label = expr instanceof LambdaExpr ? "lambda" : "method-ref";
-            return mkNode(FlowNodeKind.CALL, label, lineOf(expr), null,
-                    null, -1, null, CallResolution.UNRESOLVED, null, ControlSubtype.NONE);
-        }
-        if (expr instanceof ArrayCreationExpr ace) {
-            return mkTemp("new " + ace.getElementType().asString() + "[]",
-                    ace.getElementType().asString());
-        }
+        if (expr instanceof LambdaExpr le) return analyzeLambda(le);
+        if (expr instanceof MethodReferenceExpr mre) return analyzeMethodReference(mre);
+        if (expr instanceof ArrayCreationExpr ace) return analyzeArrayCreation(ace);
         // Fallback
         return mkTemp("expr:" + expr.getClass().getSimpleName(), null);
     }
@@ -456,13 +446,14 @@ public class MethodFlowBuilder {
         MethodSignature sig = null;
         CallResolution res = CallResolution.UNRESOLVED;
         String returnType = null;
+        String declaring = null;
         try {
             var resolved = mce.resolve();
             var paramTypes = new ArrayList<String>();
             for (int i = 0; i < resolved.getNumberOfParams(); i++) {
                 paramTypes.add(resolved.getParam(i).getType().describe());
             }
-            String declaring = resolved.declaringType().getQualifiedName();
+            declaring = resolved.declaringType().getQualifiedName();
             returnType = resolved.getReturnType().describe();
             sig = new MethodSignature(declaring, resolved.getName(), paramTypes, returnType);
             res = CallResolution.RESOLVED;
@@ -470,13 +461,37 @@ public class MethodFlowBuilder {
             res = CallResolution.UNRESOLVED;
         }
 
-        var call = mkNode(FlowNodeKind.CALL, mce.getNameAsString() + "()", lineOf(mce),
-                returnType, null, -1, sig, res, null, ControlSubtype.NONE);
+        // Determine call style
+        String callStyle;
+        if (mce.getScope().isEmpty()) {
+            callStyle = CallStyle.METHOD.name();
+        } else if (receiver != null && receiver.kind() == FlowNodeKind.THIS_REF) {
+            callStyle = CallStyle.METHOD.name();
+        } else if (declaring != null && mce.getScope().isPresent()
+                && mce.getScope().get() instanceof NameExpr nameScope
+                && Character.isUpperCase(nameScope.getNameAsString().charAt(0))
+                && scope.currentDef(nameScope.getNameAsString()) == null) {
+            callStyle = CallStyle.STATIC.name();
+        } else if (mce.getScope().isPresent()) {
+            callStyle = CallStyle.CHAINED.name();
+        } else {
+            callStyle = CallStyle.METHOD.name();
+        }
 
-        if (receiver != null) graph.addEdge(receiver, call, FlowEdgeKind.ARG_PASS, "receiver");
+        var callAttrs = new HashMap<String, String>();
+        callAttrs.put("methodName", mce.getNameAsString());
+        callAttrs.put("callStyle", callStyle);
+
+        var call = new FlowNode(graph.nextId(prefixOf(FlowNodeKind.CALL)),
+                FlowNodeKind.CALL, mce.getNameAsString() + "()", lineOf(mce),
+                returnType, null, -1, sig, res, null, ControlSubtype.NONE,
+                currentEnclosing(), callAttrs, stmtCounter++);
+        graph.addNode(call);
+
+        if (receiver != null) graph.addEdge(receiver, call, FlowEdgeKind.RECEIVER);
         for (int i = 0; i < args.size(); i++) {
             if (args.get(i) != null) {
-                graph.addEdge(args.get(i), call, FlowEdgeKind.ARG_PASS, "arg[" + i + "]");
+                graph.addEdge(args.get(i), call, FlowEdgeKind.ARG_PASS, String.valueOf(i));
             }
         }
 
@@ -507,10 +522,20 @@ public class MethodFlowBuilder {
             res = CallResolution.UNRESOLVED;
         }
 
-        var call = mkNode(FlowNodeKind.CALL, "new " + oce.getType().asString(), lineOf(oce),
-                returnType, null, -1, sig, res, null, ControlSubtype.NONE);
+        var objAttrs = new HashMap<String, String>();
+        objAttrs.put("methodName", "<init>");
+        objAttrs.put("callStyle", CallStyle.CONSTRUCTOR.name());
+
+        var call = new FlowNode(graph.nextId(prefixOf(FlowNodeKind.OBJECT_CREATE)),
+                FlowNodeKind.OBJECT_CREATE, "new " + oce.getType().asString(), lineOf(oce),
+                returnType, null, -1, sig, res, null, ControlSubtype.NONE,
+                currentEnclosing(), objAttrs, stmtCounter++);
+        graph.addNode(call);
+
         for (int i = 0; i < args.size(); i++) {
-            if (args.get(i) != null) graph.addEdge(args.get(i), call, FlowEdgeKind.ARG_PASS, "arg[" + i + "]");
+            if (args.get(i) != null) {
+                graph.addEdge(args.get(i), call, FlowEdgeKind.ARG_PASS, String.valueOf(i));
+            }
         }
         var result = mkNode(FlowNodeKind.CALL_RESULT, oce.getType().asString(),
                 lineOf(oce), returnType, null, -1, sig, res, null, ControlSubtype.NONE);
@@ -667,43 +692,85 @@ public class MethodFlowBuilder {
         var attrs = new HashMap<String, String>();
         attrs.put("literalType", literalType);
         attrs.put("value", canonicalValue);
-        return mkExpr(FlowNodeKind.LITERAL, lineOf(le), typeFqn, attrs);
+        var node = mkExpr(FlowNodeKind.LITERAL, lineOf(le), typeFqn, attrs);
+        return node;
+    }
+
+    // ─── Task 6: Array, Ternary, Lambda, MethodRef, ObjectCreation, Super ─
+
+    private FlowNode analyzeArrayAccess(ArrayAccessExpr aae) {
+        var arr = analyzeExpr(aae.getName());
+        var idx = analyzeExpr(aae.getIndex());
+        var node = mkExpr(FlowNodeKind.ARRAY_ACCESS, lineOf(aae), null, Map.of());
+        if (arr != null) graph.addEdge(arr, node, FlowEdgeKind.ARRAY_REF);
+        if (idx != null) graph.addEdge(idx, node, FlowEdgeKind.ARRAY_INDEX);
+        return node;
+    }
+
+    private FlowNode analyzeArrayCreation(ArrayCreationExpr ace) {
+        var elementType = ace.getElementType().asString();
+        var attrs = new HashMap<String, String>();
+        attrs.put("elementType", elementType);
+        var node = mkExpr(FlowNodeKind.ARRAY_CREATE, lineOf(ace), elementType + "[]", attrs);
+        for (var level : ace.getLevels()) {
+            level.getDimension().ifPresent(dim -> {
+                var dimNode = analyzeExpr(dim);
+                if (dimNode != null) graph.addEdge(dimNode, node, FlowEdgeKind.ARRAY_DIM);
+            });
+        }
+        // Also handle initializer if present
+        ace.getInitializer().ifPresent(init -> {
+            for (var val : init.getValues()) {
+                var valNode = analyzeExpr(val);
+                if (valNode != null) graph.addEdge(valNode, node, FlowEdgeKind.DATA_DEP);
+            }
+        });
+        return node;
     }
 
     private FlowNode analyzeTernary(ConditionalExpr ce) {
         var cond = analyzeExpr(ce.getCondition());
-        var branch = mkControl(FlowNodeKind.BRANCH, ControlSubtype.TERNARY, "?:");
-        if (cond != null) graph.addEdge(cond, branch, FlowEdgeKind.DATA_DEP, "cond");
-
-        var before = scope.snapshot();
-        enclosingControlStack.push(branch.id());
-
-        scope.pushFrame();
         var thenVal = analyzeExpr(ce.getThenExpr());
-        var thenSnap = scope.snapshot();
-        scope.popFrame();
-        scope.restoreFromSnapshot(before);
-
-        scope.pushFrame();
         var elseVal = analyzeExpr(ce.getElseExpr());
-        var elseSnap = scope.snapshot();
-        scope.popFrame();
-        scope.restoreFromSnapshot(before);
 
-        enclosingControlStack.pop();
+        String resultType = thenVal != null ? thenVal.typeFqn() : null;
+        var node = mkExpr(FlowNodeKind.TERNARY, lineOf(ce), resultType, Map.of());
+        if (cond != null) graph.addEdge(cond, node, FlowEdgeKind.TERNARY_CONDITION);
+        if (thenVal != null) graph.addEdge(thenVal, node, FlowEdgeKind.TERNARY_THEN);
+        if (elseVal != null) graph.addEdge(elseVal, node, FlowEdgeKind.TERNARY_ELSE);
+        return node;
+    }
 
-        var merge = mkControl(FlowNodeKind.MERGE, ControlSubtype.TERNARY, "?:-merge");
-        graph.addEdge(branch, merge, FlowEdgeKind.CONTROL_DEP);
-        mergeBranches(before, List.of(thenSnap, elseSnap), merge);
+    private FlowNode analyzeLambda(LambdaExpr le) {
+        var paramNames = new StringBuilder();
+        var paramTypes = new StringBuilder();
+        for (var p : le.getParameters()) {
+            if (paramNames.length() > 0) {
+                paramNames.append(",");
+                paramTypes.append(",");
+            }
+            paramNames.append(p.getNameAsString());
+            paramTypes.append(p.getType().asString());
+        }
+        var attrs = new HashMap<String, String>();
+        attrs.put("paramNames", paramNames.toString());
+        attrs.put("paramTypes", paramTypes.toString());
+        return mkExpr(FlowNodeKind.LAMBDA, lineOf(le), null, attrs);
+    }
 
-        // Phi for the result of the ternary itself
-        var phi = mkNode(FlowNodeKind.MERGE_VALUE, "phi(?:)", lineOf(ce),
-                thenVal != null ? thenVal.typeFqn() : null, null, -1,
-                null, null, null, ControlSubtype.NONE);
-        graph.addEdge(merge, phi, FlowEdgeKind.CONTROL_DEP);
-        if (thenVal != null) graph.addEdge(thenVal, phi, FlowEdgeKind.PHI_INPUT, "then");
-        if (elseVal != null) graph.addEdge(elseVal, phi, FlowEdgeKind.PHI_INPUT, "else");
-        return phi;
+    private FlowNode analyzeMethodReference(MethodReferenceExpr mre) {
+        String targetType;
+        if (mre.getScope() instanceof TypeExpr te) {
+            targetType = te.getType().asString();
+        } else if (mre.getScope() instanceof NameExpr ne) {
+            targetType = ne.getNameAsString();
+        } else {
+            targetType = mre.getScope().toString();
+        }
+        var attrs = new HashMap<String, String>();
+        attrs.put("methodName", mre.getIdentifier());
+        attrs.put("targetType", targetType);
+        return mkExpr(FlowNodeKind.METHOD_REF, lineOf(mre), null, attrs);
     }
 
     // ─── Helpers ────────────────────────────────────────────────────────
@@ -714,6 +781,17 @@ public class MethodFlowBuilder {
                     null, -1, null, null, null, ControlSubtype.NONE);
         }
         return thisRef;
+    }
+
+    private FlowNode ensureSuperRef() {
+        if (superRef == null) {
+            superRef = new FlowNode(graph.nextId(prefixOf(FlowNodeKind.SUPER_REF)),
+                    FlowNodeKind.SUPER_REF, "super", -1, declaringTypeFqn,
+                    null, -1, null, null, null, ControlSubtype.NONE,
+                    currentEnclosing(), null, -1);
+            graph.addNode(superRef);
+        }
+        return superRef;
     }
 
     /**

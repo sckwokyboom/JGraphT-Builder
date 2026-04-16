@@ -106,7 +106,7 @@ class MethodFlowBuilderTest {
         for (var binOp : binOps) {
             var inEdgeKinds = graph.incomingEdgesOf(binOp).stream()
                     .map(e -> e.kind())
-                    .collect(Collectors.toSet());
+                    .collect(java.util.stream.Collectors.toSet());
             assertThat(inEdgeKinds)
                     .as("BINARY_OP %s should have LEFT_OPERAND or RIGHT_OPERAND edges", binOp.id())
                     .containsAnyOf(FlowEdgeKind.LEFT_OPERAND, FlowEdgeKind.RIGHT_OPERAND);
@@ -116,6 +116,7 @@ class MethodFlowBuilderTest {
     @Test
     void literalNodesHaveTypedAttributes() {
         // OwnerHelper#findOrAdopt contains literal "0" (counter), "1" (retries - 1, counter + 1)
+        // OwnerHelper#lookup throws new RuntimeException("not found") — has string literal
         var graph = findMethod("com.example.OwnerHelper", "findOrAdopt");
         var literals = graph.nodesOf(FlowNodeKind.LITERAL);
         assertThat(literals).isNotEmpty();
@@ -126,10 +127,50 @@ class MethodFlowBuilderTest {
     }
 
     @Test
+    void ternaryProducesTypedNode() {
+        // OwnerHelper#describe: dog == null ? "none" : dog.name()
+        var graph = findMethod("com.example.OwnerHelper", "describe");
+        var ternaries = graph.nodesOf(FlowNodeKind.TERNARY);
+        assertThat(ternaries).isNotEmpty();
+        // Ternary must have a TERNARY_CONDITION incoming edge
+        for (var tern : ternaries) {
+            var inEdgeKinds = graph.incomingEdgesOf(tern).stream()
+                    .map(e -> e.kind())
+                    .collect(java.util.stream.Collectors.toSet());
+            assertThat(inEdgeKinds).contains(FlowEdgeKind.TERNARY_CONDITION);
+        }
+    }
+
+    @Test
+    void methodCallUsesReceiverEdge() {
+        // Owner#adoptDog: dog.setOwner(this), dogs.add(dog) — both use RECEIVER edge
+        var graph = findMethod("com.example.Owner", "adoptDog");
+        long receiverEdges = graph.edges().stream()
+                .filter(e -> e.kind() == FlowEdgeKind.RECEIVER)
+                .count();
+        assertThat(receiverEdges).isGreaterThanOrEqualTo(2);
+    }
+
+    @Test
+    void argPassLabelIsNumeric() {
+        // Args on CALL nodes should use plain numeric labels "0", "1", ...
+        var graph = findMethod("com.example.Owner", "adoptDog");
+        var argEdges = graph.edges().stream()
+                .filter(e -> e.kind() == FlowEdgeKind.ARG_PASS)
+                .collect(java.util.stream.Collectors.toList());
+        assertThat(argEdges).isNotEmpty();
+        assertThat(argEdges).allSatisfy(e ->
+                assertThat(e.label()).matches("\\d+"));
+    }
+
+    @Test
     void chainedCallProducesNestedCallResults() {
         // Owner#adoptDog calls new Dog(...), dog.setOwner(this), dogs.add(dog)
         var graph = findMethod("com.example.Owner", "adoptDog");
-        var calls = graph.callNodes();
-        assertThat(calls.size()).isGreaterThanOrEqualTo(2);
+        // CALL covers method invocations; OBJECT_CREATE covers constructor calls (new Dog(...))
+        long invocations = graph.nodes().stream()
+                .filter(n -> n.kind() == FlowNodeKind.CALL || n.kind() == FlowNodeKind.OBJECT_CREATE)
+                .count();
+        assertThat(invocations).isGreaterThanOrEqualTo(3);
     }
 }
