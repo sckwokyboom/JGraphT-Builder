@@ -43,9 +43,7 @@ public class FlowCodeReconstructor {
         var sig = graph.methodSignature();
         var sb = new StringBuilder();
 
-        // Build signature
-        String returnType = sig.returnType() == null ? "void" : shortName(sig.returnType());
-        String methodName = sig.methodName();
+        boolean isConstructor = "<init>".equals(sig.methodName());
 
         // Build parameter list from PARAM nodes
         var params = graph.paramNodes().stream()
@@ -53,7 +51,16 @@ public class FlowCodeReconstructor {
                         .thenComparingInt(FlowNode::sourceLine))
                 .toList();
 
-        sb.append(returnType).append(" ").append(methodName).append("(");
+        if (isConstructor) {
+            // Constructor: ClassName(params)
+            sb.append(shortName(sig.declaringType()));
+        } else {
+            // Regular method: returnType methodName(params)
+            String returnType = sig.returnType() == null ? "void" : shortName(sig.returnType());
+            sb.append(returnType).append(" ").append(sig.methodName());
+        }
+
+        sb.append("(");
         for (int i = 0; i < params.size(); i++) {
             if (i > 0) sb.append(", ");
             var p = params.get(i);
