@@ -46,20 +46,26 @@ record ProjectIndex(
     Map<Path, List<ClassInfo>> classesByFile
 ) {
     Optional<ClassInfo> findClass(String fqn);
-    List<MethodInfo> allMethods();
+    List<ExecutableInfo> allExecutables();
 }
 
 record ClassInfo(
     String fqn, Path file, int startLine, int endLine,
-    List<MethodInfo> methods, List<FieldInfo> fields
+    List<ExecutableInfo> executables, List<FieldInfo> fields
 )
 
-record MethodInfo(
-    String name, String declaringType,
-    List<ParamInfo> parameters, String returnType,
-    int startLine, int endLine,
-    Object astHandle  // opaque: JDT ASTNode or JavaParser MethodDeclaration
+/** Covers methods and constructors. */
+record ExecutableInfo(
+    ExecutableKind kind,            // METHOD or CONSTRUCTOR
+    String name,                    // method name or "<init>"
+    String declaringType,
+    List<ParamInfo> parameters,
+    String returnType,              // null for constructors
+    Path file,                      // source file (required for tree-sitter→JDT fallback)
+    int startLine, int endLine
 )
+
+enum ExecutableKind { METHOD, CONSTRUCTOR }
 
 record ParamInfo(String name, String type)
 record FieldInfo(String name, String type)
@@ -73,13 +79,21 @@ Implementations:
 
 ```java
 interface MethodBodyAnalyzer {
-    MethodFlowGraph analyze(MethodInfo method);
+    MethodFlowGraph analyze(ExecutableInfo executable);
+    
+    /** Batch-analyze all executables from one file. Implementations should parse
+     *  the file once and locate each executable by name+line. */
+    default List<MethodFlowGraph> analyzeFile(Path file, List<ExecutableInfo> executables) {
+        return executables.stream().map(this::analyze).toList();
+    }
 }
 ```
 
-Takes a `MethodInfo` and produces a `MethodFlowGraph`. Each implementation handles parsing and type resolution internally — JDT uses bindings on AST nodes, JavaParser uses its symbol solver. No separate `TypeResolver` interface: resolution strategy is an implementation detail of each analyzer.
+Takes an `ExecutableInfo` and produces a `MethodFlowGraph`. Each implementation handles parsing and type resolution internally — JDT uses bindings on AST nodes, JavaParser uses its symbol solver. No separate `TypeResolver` interface.
 
-If `MethodInfo.astHandle` is present and matches the analyzer's AST type, it's used directly. If null (e.g. when tree-sitter did the indexing), the analyzer parses the file itself using `MethodInfo.file` + `startLine`/`endLine` to locate the method.
+The analyzer locates the method in the source file using `ExecutableInfo.file` + `startLine`/`endLine` + name/signature. The `analyzeFile()` batch method exists so implementations can parse each file once (JDT `ASTParser.createASTs()` for batch, or single parse + iterate). `FlowGraphService` groups executables by file and calls `analyzeFile()`.
+
+Error isolation: `analyzeFile()` catches per-executable failures and skips broken methods (matching current `ProjectFlowGraphs` behavior).
 
 Implementations:
 - `JdtMethodBodyAnalyzer` — primary, uses JDT `org.eclipse.jdt.core.dom.*` AST with `resolveMethodBinding()` for type resolution
@@ -129,16 +143,20 @@ JDT provides `resolveBinding()` / `resolveMethodBinding()` on AST nodes. Unlike 
 ```java
 // JDT method call resolution
 IMethodBinding binding = methodInvocation.resolveMethodBinding();
-if (binding != null) {
+if (binding != null && !binding.isRecovered()) {
     String declaring = binding.getDeclaringClass().getQualifiedName();
     String returnType = binding.getReturnType().getQualifiedName();
-    // ... always reliable
     sig = new MethodSignature(declaring, binding.getName(), paramTypes, returnType);
     res = CallResolution.RESOLVED;
+} else if (binding != null && binding.isRecovered()) {
+    // Recovered binding — best-effort, may be incomplete
+    res = CallResolution.PARTIALLY_RESOLVED;
 } else {
     res = CallResolution.UNRESOLVED;
 }
 ```
+
+Note: JDT bindings are much more reliable than JavaParser's symbol solver, but `isRecovered()` must be checked. Recovered bindings occur when JDT cannot fully resolve a type (e.g. missing classpath entry) but makes a best-effort attempt. Only non-recovered bindings should be marked `RESOLVED`.
 
 ### JDT environment setup
 
@@ -192,11 +210,10 @@ Uses official `java-tree-sitter` bindings: https://github.com/tree-sitter/java-t
 
 ```groovy
 // build.gradle — optional dependency
-implementation('io.github.tree-sitter:tree-sitter:0.24.4') { transitive = false }
-implementation('io.github.tree-sitter:tree-sitter-java:0.23.5') { transitive = false }
+implementation('io.github.tree-sitter:jtreesitter:0.24.4') { transitive = false }
 ```
 
-(Exact coordinates and versions to be verified at implementation time.)
+Requires `--enable-native-access=ALL-UNNAMED` JVM arg. The Java grammar is loaded at runtime via tree-sitter's language loading mechanism. Exact version to be verified at implementation time.
 
 ### Tree-sitter queries
 
@@ -211,19 +228,30 @@ implementation('io.github.tree-sitter:tree-sitter-java:0.23.5') { transitive = f
   name: (identifier) @method_name
   parameters: (formal_parameters) @params)
 
+;; Extract constructor declarations
+(constructor_declaration
+  name: (identifier) @ctor_name
+  parameters: (formal_parameters) @params)
+
 ;; Extract field declarations
 (field_declaration
   type: (_) @field_type
   declarator: (variable_declarator
     name: (identifier) @field_name))
+
+;; Extract interface, enum, record declarations (for completeness)
+(interface_declaration name: (identifier) @iface_name)
+(enum_declaration name: (identifier) @enum_name)
+(record_declaration name: (identifier) @record_name)
 ```
 
 ### Optionality
 
 `TreeSitterSourceIndexer.tryCreate()` returns `Optional<SourceIndexer>`:
-- Tries to load native lib
-- If `UnsatisfiedLinkError` or class not found → returns `Optional.empty()`
+- Performs full end-to-end instantiation: loads native lib, creates parser, parses a trivial snippet
+- If any `LinkageError`, `NoClassDefFoundError`, or runtime failure → returns `Optional.empty()`
 - Caller falls back to JDT-based indexing
+- Must document required JVM args (`--enable-native-access`) in README and gradle config
 
 ---
 
@@ -243,11 +271,21 @@ public class FlowGraphService {
     public List<Entry> buildAll(List<Path> sourceRoots, Predicate<String> scope) {
         var index = indexer.indexProject(sourceRoots);
         var results = new ArrayList<Entry>();
-        for (var method : index.allMethods()) {
-            if (!scope.test(method.declaringType())) continue;
-            var graph = analyzer.analyze(method);
-            results.add(new Entry(method.declaringType(), method.name(),
-                    displayName(method), packageOf(method), graph));
+        
+        // Group by file for batch parsing (one parse per file, not per method)
+        var byFile = index.allExecutables().stream()
+                .filter(e -> scope.test(e.declaringType()))
+                .collect(Collectors.groupingBy(ExecutableInfo::file));
+        
+        for (var fileEntry : byFile.entrySet()) {
+            var graphs = analyzer.analyzeFile(fileEntry.getKey(), fileEntry.getValue());
+            for (int i = 0; i < fileEntry.getValue().size(); i++) {
+                var exec = fileEntry.getValue().get(i);
+                if (graphs.get(i) != null) {  // null = skipped due to error
+                    results.add(new Entry(exec.declaringType(), exec.name(),
+                            displayName(exec), packageOf(exec), graphs.get(i)));
+                }
+            }
         }
         return results;
     }
@@ -280,15 +318,19 @@ Becomes a thin backward-compatible wrapper around `FlowGraphService`, or is remo
 
 ```groovy
 // Eclipse JDT Core (standalone, no Eclipse IDE needed)
-implementation 'org.eclipse.jdt:org.eclipse.jdt.core:3.38.0'
-implementation 'org.eclipse.jdt:org.eclipse.jdt.core.compiler.batch:3.38.0'
+// JDT 3.43+ required for Java 25 support (VERSION_25 constant)
+implementation 'org.eclipse.jdt:org.eclipse.jdt.core:3.45.0'
+implementation 'org.eclipse.jdt:ecj:3.45.0'  // embedded compiler (for ASTParser)
 
-// Tree-sitter (optional)
-implementation('io.github.tree-sitter:tree-sitter:0.24.4') { transitive = false }
-implementation('io.github.tree-sitter:tree-sitter-java:0.23.5') { transitive = false }
+// Tree-sitter (optional — requires native libs, may not work on all platforms)
+// Official Java bindings via Foreign Function & Memory API (Java 22+)
+implementation('io.github.tree-sitter:jtreesitter:0.24.4') { transitive = false }
 ```
 
-(Exact versions to be verified — JDT 3.38 supports Java 23; for Java 25 preview, may need a newer snapshot or compiler options workaround.)
+Notes:
+- JDT versions to be verified at implementation time on Maven Central
+- tree-sitter `jtreesitter` requires `--enable-native-access=ALL-UNNAMED` JVM arg
+- The Java grammar native library must be supplied separately (bundled or downloaded at runtime)
 
 ### Kept
 
