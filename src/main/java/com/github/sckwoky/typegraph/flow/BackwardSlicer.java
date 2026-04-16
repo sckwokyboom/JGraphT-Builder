@@ -25,7 +25,27 @@ public class BackwardSlicer {
             FlowEdgeKind.CALL_RESULT_OF,
             FlowEdgeKind.RETURN_DEP,
             FlowEdgeKind.DEF_USE,
-            FlowEdgeKind.PHI_INPUT
+            FlowEdgeKind.PHI_INPUT,
+            // Expression operand edges
+            FlowEdgeKind.LEFT_OPERAND,
+            FlowEdgeKind.RIGHT_OPERAND,
+            FlowEdgeKind.UNARY_OPERAND,
+            FlowEdgeKind.CAST_OPERAND,
+            FlowEdgeKind.INSTANCEOF_OPERAND,
+            // Array edges
+            FlowEdgeKind.ARRAY_REF,
+            FlowEdgeKind.ARRAY_INDEX,
+            FlowEdgeKind.ARRAY_DIM,
+            // Ternary edges
+            FlowEdgeKind.TERNARY_CONDITION,
+            FlowEdgeKind.TERNARY_THEN,
+            FlowEdgeKind.TERNARY_ELSE,
+            // Receiver, assignment, and value edges
+            FlowEdgeKind.RECEIVER,
+            FlowEdgeKind.ASSIGN_VALUE,
+            FlowEdgeKind.THROW_VALUE,
+            FlowEdgeKind.YIELD_VALUE,
+            FlowEdgeKind.CONDITION
     );
 
     /**

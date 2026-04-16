@@ -7,13 +7,35 @@ import java.util.*;
 
 /**
  * Extracts call-centric compressed chains from a sliced {@link MethodFlowGraph}.
- * Technical nodes (LOCAL_DEF/USE, TEMP_EXPR, MERGE_VALUE, MERGE, BRANCH, LOOP)
- * are skipped; only PARAM, FIELD_READ, CALL, CALL_RESULT and RETURN are kept.
+ * Technical nodes (LOCAL_DEF/USE, TEMP_EXPR, MERGE_VALUE, MERGE, BRANCH, LOOP,
+ * BINARY_OP, UNARY_OP, CAST, INSTANCEOF, ARRAY_ACCESS, ARRAY_CREATE, TERNARY,
+ * ASSIGN, LITERAL) are skipped; only PARAM, FIELD_READ, CALL, CALL_RESULT and
+ * RETURN are kept.
  * <p>
  * Bounded enumeration: simple paths only, max depth and a per-(source, return)
  * cap to keep the result tractable on branching methods.
  */
 public class FlowChainExtractor {
+
+    /** Node kinds treated as "technical" — traversed but never emitted in compressed chains. */
+    private static final Set<FlowNodeKind> SKIP_KINDS = EnumSet.of(
+            FlowNodeKind.LOCAL_DEF,
+            FlowNodeKind.LOCAL_USE,
+            FlowNodeKind.MERGE_VALUE,
+            FlowNodeKind.MERGE,
+            FlowNodeKind.BRANCH,
+            FlowNodeKind.LOOP,
+            // Expression-level nodes
+            FlowNodeKind.BINARY_OP,
+            FlowNodeKind.UNARY_OP,
+            FlowNodeKind.CAST,
+            FlowNodeKind.INSTANCEOF,
+            FlowNodeKind.ARRAY_ACCESS,
+            FlowNodeKind.ARRAY_CREATE,
+            FlowNodeKind.TERNARY,
+            FlowNodeKind.ASSIGN,
+            FlowNodeKind.LITERAL
+    );
 
     public record EvidenceChainSource(FlowNodeKind kind, String name, String typeFqn, FieldOrigin origin) {}
 
