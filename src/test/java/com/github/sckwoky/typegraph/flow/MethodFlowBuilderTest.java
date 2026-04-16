@@ -173,4 +173,17 @@ class MethodFlowBuilderTest {
                 .count();
         assertThat(invocations).isGreaterThanOrEqualTo(3);
     }
+
+    @Test
+    void branchNodesHaveConditionEdge() {
+        var graph = findMethod("com.example.OwnerHelper", "findOrAdopt");
+        for (var branch : graph.branchNodes()) {
+            if (branch.controlSubtype() == ControlSubtype.IF) {
+                var condEdges = graph.incomingEdgesOf(branch).stream()
+                        .filter(e -> e.kind() == FlowEdgeKind.CONDITION)
+                        .toList();
+                assertThat(condEdges).as("IF branch should have CONDITION edge: " + branch).isNotEmpty();
+            }
+        }
+    }
 }

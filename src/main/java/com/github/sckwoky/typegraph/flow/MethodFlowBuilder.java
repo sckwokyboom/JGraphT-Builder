@@ -145,8 +145,8 @@ public class MethodFlowBuilder {
 
     private void processIf(IfStmt is) {
         var condVal = analyzeExpr(is.getCondition());
-        var branch = mkControl(FlowNodeKind.BRANCH, ControlSubtype.IF, "if");
-        if (condVal != null) graph.addEdge(condVal, branch, FlowEdgeKind.DATA_DEP, "cond");
+        var branch = mkControl(FlowNodeKind.BRANCH, ControlSubtype.IF, "if", lineOf(is));
+        if (condVal != null) graph.addEdge(condVal, branch, FlowEdgeKind.CONDITION);
 
         var before = scope.snapshot();
         enclosingControlStack.push(branch.id());
@@ -172,15 +172,15 @@ public class MethodFlowBuilder {
 
         enclosingControlStack.pop();
 
-        var merge = mkControl(FlowNodeKind.MERGE, ControlSubtype.IF, "merge");
+        var merge = mkControl(FlowNodeKind.MERGE, ControlSubtype.IF, "merge", lineOf(is));
         graph.addEdge(branch, merge, FlowEdgeKind.CONTROL_DEP);
         mergeBranches(before, List.of(thenSnap, elseSnap), merge);
     }
 
     private void processWhile(WhileStmt ws) {
-        var loop = mkControl(FlowNodeKind.LOOP, ControlSubtype.WHILE, "while");
+        var loop = mkControl(FlowNodeKind.LOOP, ControlSubtype.WHILE, "while", lineOf(ws));
         var cond = analyzeExpr(ws.getCondition());
-        if (cond != null) graph.addEdge(cond, loop, FlowEdgeKind.DATA_DEP, "cond");
+        if (cond != null) graph.addEdge(cond, loop, FlowEdgeKind.CONDITION);
 
         var before = scope.snapshot();
         enclosingControlStack.push(loop.id());
@@ -195,7 +195,7 @@ public class MethodFlowBuilder {
     }
 
     private void processDo(DoStmt ds) {
-        var loop = mkControl(FlowNodeKind.LOOP, ControlSubtype.DO, "do-while");
+        var loop = mkControl(FlowNodeKind.LOOP, ControlSubtype.DO, "do-while", lineOf(ds));
         var before = scope.snapshot();
         enclosingControlStack.push(loop.id());
         scope.pushFrame();
@@ -205,7 +205,7 @@ public class MethodFlowBuilder {
         enclosingControlStack.pop();
 
         var cond = analyzeExpr(ds.getCondition());
-        if (cond != null) graph.addEdge(cond, loop, FlowEdgeKind.DATA_DEP, "cond");
+        if (cond != null) graph.addEdge(cond, loop, FlowEdgeKind.CONDITION);
 
         scope.restoreFromSnapshot(before);
         mergeBranches(before, List.of(before, after), loop);
@@ -213,18 +213,24 @@ public class MethodFlowBuilder {
 
     private void processFor(ForStmt fs) {
         scope.pushFrame();
-        for (var init : fs.getInitialization()) analyzeExpr(init);
-        var loop = mkControl(FlowNodeKind.LOOP, ControlSubtype.FOR, "for");
+        var loop = mkControl(FlowNodeKind.LOOP, ControlSubtype.FOR, "for", lineOf(fs));
+        for (var init : fs.getInitialization()) {
+            var initNode = analyzeExpr(init);
+            if (initNode != null) graph.addEdge(initNode, loop, FlowEdgeKind.LOOP_INIT);
+        }
         fs.getCompare().ifPresent(c -> {
             var cond = analyzeExpr(c);
-            if (cond != null) graph.addEdge(cond, loop, FlowEdgeKind.DATA_DEP, "cond");
+            if (cond != null) graph.addEdge(cond, loop, FlowEdgeKind.CONDITION);
         });
 
         var before = scope.snapshot();
         enclosingControlStack.push(loop.id());
         scope.pushFrame();
         processStmt(fs.getBody());
-        for (var upd : fs.getUpdate()) analyzeExpr(upd);
+        for (var upd : fs.getUpdate()) {
+            var updNode = analyzeExpr(upd);
+            if (updNode != null) graph.addEdge(updNode, loop, FlowEdgeKind.LOOP_UPDATE);
+        }
         var after = scope.snapshot();
         scope.popFrame();
         enclosingControlStack.pop();
@@ -235,9 +241,9 @@ public class MethodFlowBuilder {
     }
 
     private void processForEach(ForEachStmt fes) {
-        var loop = mkControl(FlowNodeKind.LOOP, ControlSubtype.FOREACH, "foreach");
+        var loop = mkControl(FlowNodeKind.LOOP, ControlSubtype.FOREACH, "foreach", lineOf(fes));
         var iter = analyzeExpr(fes.getIterable());
-        if (iter != null) graph.addEdge(iter, loop, FlowEdgeKind.DATA_DEP, "iterable");
+        if (iter != null) graph.addEdge(iter, loop, FlowEdgeKind.LOOP_ITERABLE);
 
         var before = scope.snapshot();
         enclosingControlStack.push(loop.id());
@@ -262,7 +268,7 @@ public class MethodFlowBuilder {
     }
 
     private void processTry(TryStmt ts) {
-        var tryNode = mkControl(FlowNodeKind.BRANCH, ControlSubtype.TRY, "try");
+        var tryNode = mkControl(FlowNodeKind.BRANCH, ControlSubtype.TRY, "try", lineOf(ts));
         enclosingControlStack.push(tryNode.id());
         var before = scope.snapshot();
 
@@ -277,7 +283,7 @@ public class MethodFlowBuilder {
 
         for (var cc : ts.getCatchClauses()) {
             var catchNode = mkControl(FlowNodeKind.BRANCH, ControlSubtype.CATCH,
-                    "catch " + cc.getParameter().getType().asString());
+                    "catch " + cc.getParameter().getType().asString(), lineOf(cc));
             graph.addEdge(tryNode, catchNode, FlowEdgeKind.CONTROL_DEP);
             enclosingControlStack.push(catchNode.id());
             scope.pushFrame();
@@ -298,12 +304,12 @@ public class MethodFlowBuilder {
 
         enclosingControlStack.pop();
 
-        var merge = mkControl(FlowNodeKind.MERGE, ControlSubtype.TRY, "try-merge");
+        var merge = mkControl(FlowNodeKind.MERGE, ControlSubtype.TRY, "try-merge", lineOf(ts));
         graph.addEdge(tryNode, merge, FlowEdgeKind.CONTROL_DEP);
         mergeBranches(before, allSnaps, merge);
 
         if (ts.getFinallyBlock().isPresent()) {
-            var fin = mkControl(FlowNodeKind.BRANCH, ControlSubtype.FINALLY, "finally");
+            var fin = mkControl(FlowNodeKind.BRANCH, ControlSubtype.FINALLY, "finally", lineOf(ts));
             graph.addEdge(merge, fin, FlowEdgeKind.CONTROL_DEP);
             enclosingControlStack.push(fin.id());
             scope.pushFrame();
@@ -315,8 +321,8 @@ public class MethodFlowBuilder {
 
     private void processSwitch(SwitchStmt ss) {
         var sel = analyzeExpr(ss.getSelector());
-        var branch = mkControl(FlowNodeKind.BRANCH, ControlSubtype.SWITCH, "switch");
-        if (sel != null) graph.addEdge(sel, branch, FlowEdgeKind.DATA_DEP, "selector");
+        var branch = mkControl(FlowNodeKind.BRANCH, ControlSubtype.SWITCH, "switch", lineOf(ss));
+        if (sel != null) graph.addEdge(sel, branch, FlowEdgeKind.CONDITION);
 
         var before = scope.snapshot();
         enclosingControlStack.push(branch.id());
@@ -332,7 +338,7 @@ public class MethodFlowBuilder {
 
         enclosingControlStack.pop();
 
-        var merge = mkControl(FlowNodeKind.MERGE, ControlSubtype.SWITCH, "switch-merge");
+        var merge = mkControl(FlowNodeKind.MERGE, ControlSubtype.SWITCH, "switch-merge", lineOf(ss));
         graph.addEdge(branch, merge, FlowEdgeKind.CONTROL_DEP);
         if (caseSnaps.isEmpty()) caseSnaps.add(before);
         mergeBranches(before, caseSnaps, merge);
@@ -821,8 +827,8 @@ public class MethodFlowBuilder {
         return temp;
     }
 
-    private FlowNode mkControl(FlowNodeKind kind, ControlSubtype subtype, String label) {
-        return mkNode(kind, label, -1, null, null, -1, null, null, null, subtype);
+    private FlowNode mkControl(FlowNodeKind kind, ControlSubtype subtype, String label, int line) {
+        return mkNode(kind, label, line, null, null, -1, null, null, null, subtype);
     }
 
     private FlowNode mkNode(FlowNodeKind kind, String label, int line,
