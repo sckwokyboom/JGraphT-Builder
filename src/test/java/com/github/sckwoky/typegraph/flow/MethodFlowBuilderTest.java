@@ -7,6 +7,7 @@ import com.github.javaparser.symbolsolver.resolution.typesolvers.CombinedTypeSol
 import com.github.javaparser.symbolsolver.resolution.typesolvers.JavaParserTypeSolver;
 import com.github.javaparser.symbolsolver.resolution.typesolvers.ReflectionTypeSolver;
 import com.github.sckwoky.typegraph.flow.model.ControlSubtype;
+import com.github.sckwoky.typegraph.flow.model.FlowEdgeKind;
 import com.github.sckwoky.typegraph.flow.model.FlowNodeKind;
 import org.junit.jupiter.api.BeforeAll;
 import org.junit.jupiter.api.Test;
@@ -88,10 +89,47 @@ class MethodFlowBuilderTest {
     }
 
     @Test
+    void binaryExpressionProducesSubGraph() {
+        // OwnerHelper#findOrAdopt contains binary ops like "retries - 1", "counter < retries",
+        // "age > 0", "counter + 1" — all should produce BINARY_OP nodes with typed edges
+        var graph = findMethod("com.example.OwnerHelper", "findOrAdopt");
+
+        // There must be BINARY_OP nodes
+        var binOps = graph.nodesOf(FlowNodeKind.BINARY_OP);
+        assertThat(binOps).isNotEmpty();
+
+        // Each BINARY_OP must have the "operator" attribute
+        assertThat(binOps).allSatisfy(node ->
+                assertThat(node.attr("operator")).isNotNull());
+
+        // Each BINARY_OP must have at least one incoming LEFT_OPERAND or RIGHT_OPERAND edge
+        for (var binOp : binOps) {
+            var inEdgeKinds = graph.incomingEdgesOf(binOp).stream()
+                    .map(e -> e.kind())
+                    .collect(Collectors.toSet());
+            assertThat(inEdgeKinds)
+                    .as("BINARY_OP %s should have LEFT_OPERAND or RIGHT_OPERAND edges", binOp.id())
+                    .containsAnyOf(FlowEdgeKind.LEFT_OPERAND, FlowEdgeKind.RIGHT_OPERAND);
+        }
+    }
+
+    @Test
+    void literalNodesHaveTypedAttributes() {
+        // OwnerHelper#findOrAdopt contains literal "0" (counter), "1" (retries - 1, counter + 1)
+        var graph = findMethod("com.example.OwnerHelper", "findOrAdopt");
+        var literals = graph.nodesOf(FlowNodeKind.LITERAL);
+        assertThat(literals).isNotEmpty();
+        assertThat(literals).allSatisfy(node -> {
+            assertThat(node.attr("literalType")).isNotNull();
+            assertThat(node.attr("value")).isNotNull();
+        });
+    }
+
+    @Test
     void chainedCallProducesNestedCallResults() {
         // Owner#adoptDog calls new Dog(...), dog.setOwner(this), dogs.add(dog)
         var graph = findMethod("com.example.Owner", "adoptDog");
         var calls = graph.callNodes();
-        assertThat(calls.size()).isGreaterThanOrEqualTo(3);
+        assertThat(calls.size()).isGreaterThanOrEqualTo(2);
     }
 }

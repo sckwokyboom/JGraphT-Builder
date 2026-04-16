@@ -39,6 +39,7 @@ public class MethodFlowBuilder {
     private VariableState scope;
     private final Deque<String> enclosingControlStack = new ArrayDeque<>();
     private FlowNode thisRef;
+    private int stmtCounter = 0;
 
     public MethodFlowBuilder(String declaringTypeFqn, FieldIndex fields) {
         this.declaringTypeFqn = declaringTypeFqn;
@@ -51,12 +52,12 @@ public class MethodFlowBuilder {
         var sig = signatureOf(md);
         graph = new MethodFlowGraph(sig);
         scope = new VariableState();
+        stmtCounter = 0;
         if (!md.isStatic()) {
             thisRef = mkNode(FlowNodeKind.THIS_REF, "this", lineOf(md), declaringTypeFqn,
                     null, -1, null, null, null, ControlSubtype.NONE);
         }
         for (var p : md.getParameters()) {
-            int idx = md.getParameters().indexOf(p);
             var pn = mkNode(FlowNodeKind.PARAM, "param " + p.getNameAsString(),
                     lineOf(p), p.getType().asString(),
                     p.getNameAsString(), 0, null, null, null, ControlSubtype.NONE);
@@ -70,6 +71,7 @@ public class MethodFlowBuilder {
         var sig = signatureOf(cd);
         graph = new MethodFlowGraph(sig);
         scope = new VariableState();
+        stmtCounter = 0;
         thisRef = mkNode(FlowNodeKind.THIS_REF, "this", lineOf(cd), declaringTypeFqn,
                 null, -1, null, null, null, ControlSubtype.NONE);
         for (var p : cd.getParameters()) {
@@ -379,38 +381,25 @@ public class MethodFlowBuilder {
         if (expr instanceof AssignExpr ae) return analyzeAssign(ae);
         if (expr instanceof VariableDeclarationExpr vde) return analyzeVarDecl(vde);
         if (expr instanceof BinaryExpr be) return analyzeBinary(be);
-        if (expr instanceof UnaryExpr ue) {
-            var inner = analyzeExpr(ue.getExpression());
-            return mkTemp("op " + ue.getOperator(), inner != null ? inner.typeFqn() : null, inner);
-        }
-        if (expr instanceof CastExpr ce) {
-            var inner = analyzeExpr(ce.getExpression());
-            return mkTemp("(" + ce.getType().asString() + ")", ce.getType().asString(), inner);
-        }
+        if (expr instanceof UnaryExpr ue) return analyzeUnary(ue);
+        if (expr instanceof CastExpr ce) return analyzeCast(ce);
         if (expr instanceof EnclosedExpr ee) return analyzeExpr(ee.getInner());
         if (expr instanceof ConditionalExpr ce) return analyzeTernary(ce);
-        if (expr instanceof LiteralExpr le) {
-            return mkNode(FlowNodeKind.LITERAL, le.toString(), lineOf(le),
-                    null, null, -1, null, null, null, ControlSubtype.NONE);
-        }
+        if (expr instanceof LiteralExpr le) return analyzeLiteral(le);
         if (expr instanceof ArrayAccessExpr aae) {
             var arr = analyzeExpr(aae.getName());
             var idx = analyzeExpr(aae.getIndex());
             return mkTemp("arr[idx]", null, arr, idx);
         }
-        if (expr instanceof InstanceOfExpr ioe) {
-            var inner = analyzeExpr(ioe.getExpression());
-            return mkTemp("instanceof " + ioe.getType().asString(), "boolean", inner);
-        }
+        if (expr instanceof InstanceOfExpr ioe) return analyzeInstanceOf(ioe);
         if (expr instanceof LambdaExpr || expr instanceof MethodReferenceExpr) {
             var label = expr instanceof LambdaExpr ? "lambda" : "method-ref";
             return mkNode(FlowNodeKind.CALL, label, lineOf(expr), null,
                     null, -1, null, CallResolution.UNRESOLVED, null, ControlSubtype.NONE);
         }
         if (expr instanceof ArrayCreationExpr ace) {
-            var t = mkTemp("new " + ace.getElementType().asString() + "[]",
+            return mkTemp("new " + ace.getElementType().asString() + "[]",
                     ace.getElementType().asString());
-            return t;
         }
         // Fallback
         return mkTemp("expr:" + expr.getClass().getSimpleName(), null);
@@ -582,10 +571,103 @@ public class MethodFlowBuilder {
         return last;
     }
 
+    // ─── Task 5: Binary, Unary, Cast, InstanceOf, Literal ───────────────
+
     private FlowNode analyzeBinary(BinaryExpr be) {
         var l = analyzeExpr(be.getLeft());
         var r = analyzeExpr(be.getRight());
-        return mkTemp("op " + be.getOperator(), null, l, r);
+        var op = BinaryOperator.fromJavaParser(be.getOperator());
+        String resultType = switch (op) {
+            case AND, OR, EQ, NE, LT, GT, LE, GE -> "boolean";
+            default -> null;
+        };
+        var attrs = new HashMap<String, String>();
+        attrs.put("operator", op.name());
+        var node = mkExpr(FlowNodeKind.BINARY_OP, lineOf(be), resultType, attrs);
+        if (l != null) graph.addEdge(l, node, FlowEdgeKind.LEFT_OPERAND);
+        if (r != null) graph.addEdge(r, node, FlowEdgeKind.RIGHT_OPERAND);
+        return node;
+    }
+
+    private FlowNode analyzeUnary(UnaryExpr ue) {
+        var inner = analyzeExpr(ue.getExpression());
+        var op = UnaryOperator.fromJavaParser(ue.getOperator());
+        var attrs = new HashMap<String, String>();
+        attrs.put("operator", op.name());
+        var node = mkExpr(FlowNodeKind.UNARY_OP, lineOf(ue),
+                inner != null ? inner.typeFqn() : null, attrs);
+        if (inner != null) graph.addEdge(inner, node, FlowEdgeKind.UNARY_OPERAND);
+        return node;
+    }
+
+    private FlowNode analyzeCast(CastExpr ce) {
+        var inner = analyzeExpr(ce.getExpression());
+        var targetType = ce.getType().asString();
+        var attrs = new HashMap<String, String>();
+        attrs.put("targetType", targetType);
+        var node = mkExpr(FlowNodeKind.CAST, lineOf(ce), targetType, attrs);
+        if (inner != null) graph.addEdge(inner, node, FlowEdgeKind.CAST_OPERAND);
+        return node;
+    }
+
+    private FlowNode analyzeInstanceOf(InstanceOfExpr ioe) {
+        var inner = analyzeExpr(ioe.getExpression());
+        var attrs = new HashMap<String, String>();
+        attrs.put("targetType", ioe.getType().asString());
+        ioe.getPattern().ifPresent(pat -> {
+            if (pat instanceof TypePatternExpr tpe) {
+                attrs.put("patternVar", tpe.getNameAsString());
+            }
+        });
+        var node = mkExpr(FlowNodeKind.INSTANCEOF, lineOf(ioe), "boolean", attrs);
+        if (inner != null) graph.addEdge(inner, node, FlowEdgeKind.INSTANCEOF_OPERAND);
+        return node;
+    }
+
+    private FlowNode analyzeLiteral(LiteralExpr le) {
+        String typeFqn;
+        String canonicalValue;
+        String literalType;
+
+        if (le instanceof IntegerLiteralExpr ile) {
+            typeFqn = "int";
+            canonicalValue = ile.getValue();
+            literalType = LiteralType.INT.name();
+        } else if (le instanceof LongLiteralExpr lle) {
+            typeFqn = "long";
+            canonicalValue = lle.getValue();
+            literalType = LiteralType.LONG.name();
+        } else if (le instanceof DoubleLiteralExpr dle) {
+            typeFqn = "double";
+            canonicalValue = dle.getValue();
+            literalType = LiteralType.DOUBLE.name();
+        } else if (le instanceof StringLiteralExpr sle) {
+            typeFqn = "java.lang.String";
+            canonicalValue = sle.asString();
+            literalType = LiteralType.STRING.name();
+        } else if (le instanceof CharLiteralExpr cle) {
+            typeFqn = "char";
+            canonicalValue = cle.getValue();
+            literalType = LiteralType.CHAR.name();
+        } else if (le instanceof BooleanLiteralExpr ble) {
+            typeFqn = "boolean";
+            canonicalValue = String.valueOf(ble.getValue());
+            literalType = LiteralType.BOOLEAN.name();
+        } else if (le instanceof NullLiteralExpr) {
+            typeFqn = null;
+            canonicalValue = "null";
+            literalType = LiteralType.NULL.name();
+        } else {
+            // TextBlockLiteralExpr and any future subtypes
+            typeFqn = "java.lang.String";
+            canonicalValue = le.toString();
+            literalType = LiteralType.STRING.name();
+        }
+
+        var attrs = new HashMap<String, String>();
+        attrs.put("literalType", literalType);
+        attrs.put("value", canonicalValue);
+        return mkExpr(FlowNodeKind.LITERAL, lineOf(le), typeFqn, attrs);
     }
 
     private FlowNode analyzeTernary(ConditionalExpr ce) {
@@ -634,6 +716,24 @@ public class MethodFlowBuilder {
         return thisRef;
     }
 
+    /**
+     * Creates a typed expression sub-node using the 14-parameter FlowNode constructor.
+     * The stmtOrdinal is assigned from the monotonically increasing stmtCounter.
+     */
+    private FlowNode mkExpr(FlowNodeKind kind, int line, String typeFqn,
+                            Map<String, String> attributes) {
+        var id = graph.nextId(prefixOf(kind));
+        var node = new FlowNode(id, kind, "", line, typeFqn, null, -1,
+                null, null, null, ControlSubtype.NONE, currentEnclosing(),
+                attributes.isEmpty() ? null : new HashMap<>(attributes), stmtCounter++);
+        graph.addNode(node);
+        return node;
+    }
+
+    /**
+     * Legacy bridge for expressions that don't yet have a dedicated handler.
+     * Uses BINARY_OP kind as a placeholder.
+     */
     private FlowNode mkTemp(String label, String typeFqn, FlowNode... sources) {
         var temp = mkNode(FlowNodeKind.BINARY_OP, label, -1, typeFqn,
                 null, -1, null, null, null, ControlSubtype.NONE);
