@@ -4,6 +4,8 @@ import com.github.javaparser.ast.body.FieldDeclaration;
 import com.github.javaparser.ast.body.TypeDeclaration;
 
 import java.util.HashMap;
+import java.util.LinkedHashMap;
+import java.util.List;
 import java.util.Map;
 
 /**
@@ -13,15 +15,23 @@ import java.util.Map;
  */
 public class FieldIndex {
 
-    private final Map<String, String> nameToType = new HashMap<>();
+    private final Map<String, String> nameToType;
 
     public FieldIndex(TypeDeclaration<?> declaringType) {
+        this.nameToType = new HashMap<>();
         if (declaringType == null) return;
         for (FieldDeclaration fd : declaringType.getFields()) {
             String type = fd.getElementType().asString();
             for (var v : fd.getVariables()) {
                 nameToType.put(v.getNameAsString(), type);
             }
+        }
+    }
+
+    public FieldIndex(List<com.github.sckwoky.typegraph.flow.spi.FieldInfo> fields) {
+        this.nameToType = new LinkedHashMap<>();
+        for (var f : fields) {
+            nameToType.put(f.name(), f.type());
         }
     }
 
