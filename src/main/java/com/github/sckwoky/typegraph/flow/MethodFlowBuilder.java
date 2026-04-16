@@ -119,17 +119,40 @@ public class MethodFlowBuilder {
         } else if (s instanceof SwitchStmt ss) {
             processSwitch(ss);
         } else if (s instanceof ThrowStmt ths) {
-            analyzeExpr(ths.getExpression());
+            var throwNode = mkExpr(FlowNodeKind.THROW, lineOf(ths), null, Map.of());
+            var val = analyzeExpr(ths.getExpression());
+            if (val != null) graph.addEdge(val, throwNode, FlowEdgeKind.THROW_VALUE);
         } else if (s instanceof SynchronizedStmt ss) {
-            analyzeExpr(ss.getExpression());
+            var syncNode = mkExpr(FlowNodeKind.SYNCHRONIZED, lineOf(ss), null, Map.of());
+            var lock = analyzeExpr(ss.getExpression());
+            if (lock != null) graph.addEdge(lock, syncNode, FlowEdgeKind.SYNC_LOCK);
+            enclosingControlStack.push(syncNode.id());
             processBlock(ss.getBody());
+            enclosingControlStack.pop();
         } else if (s instanceof LabeledStmt ls) {
+            // Push the label so break/continue can reference it, then process the inner stmt
+            enclosingControlStack.push("label:" + ls.getLabel().getIdentifier());
             processStmt(ls.getStatement());
+            enclosingControlStack.pop();
         } else if (s instanceof AssertStmt as) {
-            analyzeExpr(as.getCheck());
-            as.getMessage().ifPresent(this::analyzeExpr);
+            var attrs = new HashMap<String, String>();
+            var assertNode = mkExpr(FlowNodeKind.ASSERT, lineOf(as), null, attrs);
+            var check = analyzeExpr(as.getCheck());
+            if (check != null) graph.addEdge(check, assertNode, FlowEdgeKind.CONDITION);
+            as.getMessage().ifPresent(msg -> {
+                var msgNode = analyzeExpr(msg);
+                if (msgNode != null) graph.addEdge(msgNode, assertNode, FlowEdgeKind.ASSERT_MESSAGE);
+            });
+        } else if (s instanceof BreakStmt bs) {
+            var attrs = new HashMap<String, String>();
+            bs.getLabel().ifPresent(lbl -> attrs.put("targetLabel", lbl.getIdentifier()));
+            mkExpr(FlowNodeKind.BREAK, lineOf(bs), null, attrs);
+        } else if (s instanceof ContinueStmt cs) {
+            var attrs = new HashMap<String, String>();
+            cs.getLabel().ifPresent(lbl -> attrs.put("targetLabel", lbl.getIdentifier()));
+            mkExpr(FlowNodeKind.CONTINUE, lineOf(cs), null, attrs);
         }
-        // BreakStmt, ContinueStmt, EmptyStmt, LocalClassDeclarationStmt, etc. → ignored
+        // EmptyStmt, LocalClassDeclarationStmt, etc. → ignored
     }
 
     // ─── Control flow ───────────────────────────────────────────────────
