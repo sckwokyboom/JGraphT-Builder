@@ -1,6 +1,7 @@
 package com.github.sckwoky.typegraph.flow.model;
 
 import com.github.javaparser.ast.expr.BinaryExpr;
+import org.eclipse.jdt.core.dom.InfixExpression;
 
 public enum BinaryOperator {
     PLUS("+", 11, true),
@@ -59,5 +60,28 @@ public enum BinaryOperator {
             case SIGNED_RIGHT_SHIFT -> RSHIFT;
             case UNSIGNED_RIGHT_SHIFT -> URSHIFT;
         };
+    }
+
+    public static BinaryOperator fromJdt(InfixExpression.Operator op) {
+        if (op == InfixExpression.Operator.PLUS) return PLUS;
+        if (op == InfixExpression.Operator.MINUS) return MINUS;
+        if (op == InfixExpression.Operator.TIMES) return MULT;
+        if (op == InfixExpression.Operator.DIVIDE) return DIV;
+        if (op == InfixExpression.Operator.REMAINDER) return MOD;
+        if (op == InfixExpression.Operator.CONDITIONAL_AND) return AND;
+        if (op == InfixExpression.Operator.CONDITIONAL_OR) return OR;
+        if (op == InfixExpression.Operator.EQUALS) return EQ;
+        if (op == InfixExpression.Operator.NOT_EQUALS) return NE;
+        if (op == InfixExpression.Operator.LESS) return LT;
+        if (op == InfixExpression.Operator.GREATER) return GT;
+        if (op == InfixExpression.Operator.LESS_EQUALS) return LE;
+        if (op == InfixExpression.Operator.GREATER_EQUALS) return GE;
+        if (op == InfixExpression.Operator.AND) return BIT_AND;
+        if (op == InfixExpression.Operator.OR) return BIT_OR;
+        if (op == InfixExpression.Operator.XOR) return BIT_XOR;
+        if (op == InfixExpression.Operator.LEFT_SHIFT) return LSHIFT;
+        if (op == InfixExpression.Operator.RIGHT_SHIFT_SIGNED) return RSHIFT;
+        if (op == InfixExpression.Operator.RIGHT_SHIFT_UNSIGNED) return URSHIFT;
+        throw new IllegalArgumentException("Unknown JDT infix operator: " + op);
     }
 }

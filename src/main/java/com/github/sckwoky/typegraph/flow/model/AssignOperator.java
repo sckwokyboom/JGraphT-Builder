@@ -1,6 +1,7 @@
 package com.github.sckwoky.typegraph.flow.model;
 
 import com.github.javaparser.ast.expr.AssignExpr;
+import org.eclipse.jdt.core.dom.Assignment;
 
 public enum AssignOperator {
     ASSIGN("="),
@@ -35,5 +36,21 @@ public enum AssignOperator {
             case SIGNED_RIGHT_SHIFT -> RSHIFT_ASSIGN;
             case UNSIGNED_RIGHT_SHIFT -> URSHIFT_ASSIGN;
         };
+    }
+
+    public static AssignOperator fromJdt(Assignment.Operator op) {
+        if (op == Assignment.Operator.ASSIGN) return ASSIGN;
+        if (op == Assignment.Operator.PLUS_ASSIGN) return PLUS_ASSIGN;
+        if (op == Assignment.Operator.MINUS_ASSIGN) return MINUS_ASSIGN;
+        if (op == Assignment.Operator.TIMES_ASSIGN) return MULT_ASSIGN;
+        if (op == Assignment.Operator.DIVIDE_ASSIGN) return DIV_ASSIGN;
+        if (op == Assignment.Operator.REMAINDER_ASSIGN) return MOD_ASSIGN;
+        if (op == Assignment.Operator.BIT_AND_ASSIGN) return AND_ASSIGN;
+        if (op == Assignment.Operator.BIT_OR_ASSIGN) return OR_ASSIGN;
+        if (op == Assignment.Operator.BIT_XOR_ASSIGN) return XOR_ASSIGN;
+        if (op == Assignment.Operator.LEFT_SHIFT_ASSIGN) return LSHIFT_ASSIGN;
+        if (op == Assignment.Operator.RIGHT_SHIFT_SIGNED_ASSIGN) return RSHIFT_ASSIGN;
+        if (op == Assignment.Operator.RIGHT_SHIFT_UNSIGNED_ASSIGN) return URSHIFT_ASSIGN;
+        throw new IllegalArgumentException("Unknown JDT assignment operator: " + op);
     }
 }

@@ -1,6 +1,8 @@
 package com.github.sckwoky.typegraph.flow.model;
 
 import com.github.javaparser.ast.expr.UnaryExpr;
+import org.eclipse.jdt.core.dom.PostfixExpression;
+import org.eclipse.jdt.core.dom.PrefixExpression;
 
 public enum UnaryOperator {
     NOT("!", true),
@@ -34,5 +36,21 @@ public enum UnaryOperator {
             case POSTFIX_DECREMENT -> POST_DEC;
             case PLUS -> PLUS;
         };
+    }
+
+    public static UnaryOperator fromJdtPrefix(PrefixExpression.Operator op) {
+        if (op == PrefixExpression.Operator.NOT) return NOT;
+        if (op == PrefixExpression.Operator.MINUS) return NEG;
+        if (op == PrefixExpression.Operator.COMPLEMENT) return BIT_NOT;
+        if (op == PrefixExpression.Operator.INCREMENT) return PRE_INC;
+        if (op == PrefixExpression.Operator.DECREMENT) return PRE_DEC;
+        if (op == PrefixExpression.Operator.PLUS) return PLUS;
+        throw new IllegalArgumentException("Unknown JDT prefix operator: " + op);
+    }
+
+    public static UnaryOperator fromJdtPostfix(PostfixExpression.Operator op) {
+        if (op == PostfixExpression.Operator.INCREMENT) return POST_INC;
+        if (op == PostfixExpression.Operator.DECREMENT) return POST_DEC;
+        throw new IllegalArgumentException("Unknown JDT postfix operator: " + op);
     }
 }
