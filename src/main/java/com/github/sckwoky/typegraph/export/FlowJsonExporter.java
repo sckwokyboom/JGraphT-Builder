@@ -61,6 +61,12 @@ public class FlowJsonExporter {
         if (n.fieldOrigin() != null) sb.append(",\"fieldOrigin\":").append(jsonStr(n.fieldOrigin().name()));
         if (n.sourceLine() > 0) sb.append(",\"line\":").append(n.sourceLine());
         if (n.enclosingControlId() != null) sb.append(",\"enclosingControlId\":").append(jsonStr(n.enclosingControlId()));
+        if (n.stmtOrdinal() >= 0) sb.append(",\"stmtOrdinal\":").append(n.stmtOrdinal());
+        if (n.attributes() != null) {
+            for (var entry : n.attributes().entrySet()) {
+                sb.append(',').append(jsonStr(entry.getKey())).append(':').append(jsonStr(entry.getValue()));
+            }
+        }
         sb.append("}}");
         return sb.toString();
     }
