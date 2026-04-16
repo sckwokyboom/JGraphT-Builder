@@ -635,7 +635,7 @@ public class MethodFlowBuilder {
     }
 
     private FlowNode mkTemp(String label, String typeFqn, FlowNode... sources) {
-        var temp = mkNode(FlowNodeKind.TEMP_EXPR, label, -1, typeFqn,
+        var temp = mkNode(FlowNodeKind.BINARY_OP, label, -1, typeFqn,
                 null, -1, null, null, null, ControlSubtype.NONE);
         for (var s : sources) {
             if (s != null) graph.addEdge(s, temp, FlowEdgeKind.DATA_DEP);
@@ -661,11 +661,11 @@ public class MethodFlowBuilder {
         return switch (kind) {
             case PARAM -> "param";
             case THIS_REF -> "this";
+            case SUPER_REF -> "super";
             case FIELD_READ -> "fr";
             case FIELD_WRITE -> "fw";
             case LOCAL_DEF -> "def";
             case LOCAL_USE -> "use";
-            case TEMP_EXPR -> "tmp";
             case MERGE_VALUE -> "phi";
             case CALL -> "call";
             case CALL_RESULT -> "res";
@@ -674,6 +674,24 @@ public class MethodFlowBuilder {
             case MERGE -> "mrg";
             case LOOP -> "loop";
             case LITERAL -> "lit";
+            case BINARY_OP -> "binop";
+            case UNARY_OP -> "unop";
+            case CAST -> "cast";
+            case INSTANCEOF -> "iof";
+            case ARRAY_CREATE -> "arrcr";
+            case ARRAY_ACCESS -> "arrac";
+            case TERNARY -> "tern";
+            case OBJECT_CREATE -> "objcr";
+            case LAMBDA -> "lam";
+            case METHOD_REF -> "mref";
+            case ASSIGN -> "asgn";
+            case THROW -> "throw";
+            case BREAK -> "brk";
+            case CONTINUE -> "cont";
+            case ASSERT -> "assert";
+            case SYNCHRONIZED -> "sync";
+            case SWITCH_CASE -> "case";
+            case YIELD -> "yield";
         };
     }
 
