@@ -235,17 +235,29 @@ graph with the following node kinds:
 
 | Group | Kinds |
 |-------|-------|
-| **Inputs** | `PARAM`, `THIS_REF`, `FIELD_READ` |
-| **Locals** | `LOCAL_DEF`, `LOCAL_USE`, `TEMP_EXPR`, `LITERAL` |
+| **Inputs** | `PARAM`, `THIS_REF`, `SUPER_REF`, `FIELD_READ` |
+| **Locals** | `LOCAL_DEF`, `LOCAL_USE`, `LITERAL` |
+| **Expressions** | `BINARY_OP`, `UNARY_OP`, `CAST`, `INSTANCEOF`, `TERNARY`, `ARRAY_ACCESS`, `ARRAY_CREATE`, `OBJECT_CREATE`, `LAMBDA`, `METHOD_REF` |
 | **Calls** | `CALL`, `CALL_RESULT` (split: the call operation vs. its produced value) |
-| **Side effects** | `FIELD_WRITE`, `RETURN` |
-| **Control** | `BRANCH` (subtype: `IF`, `SWITCH`, `TRY`, `CATCH`, `FINALLY`, `TERNARY`), `LOOP` (subtype: `FOR`, `FOREACH`, `WHILE`, `DO`), `MERGE`, `MERGE_VALUE` (phi-like) |
+| **Assignments** | `ASSIGN` (compound assignments like `+=`, `-=`) |
+| **Side effects** | `FIELD_WRITE`, `RETURN`, `THROW` |
+| **Control** | `BRANCH` (subtype: `IF`, `SWITCH`, `TRY`, `CATCH`, `FINALLY`), `LOOP` (subtype: `FOR`, `FOREACH`, `WHILE`, `DO`), `MERGE`, `MERGE_VALUE` (phi-like), `SWITCH_CASE`, `YIELD` |
+| **Abrupt control** | `BREAK`, `CONTINUE`, `ASSERT`, `SYNCHRONIZED` |
 
-Edges: `DATA_DEP`, `ARG_PASS`, `CALL_RESULT_OF`, `RETURN_DEP`, `DEF_USE`,
-`PHI_INPUT`, `CONTROL_DEP`. Variable assignments are versioned (SSA-lite); after
-an `if/switch/try/loop` the builder produces explicit `MERGE_VALUE` (phi) nodes
-joining the per-branch versions, so the slicer can follow data dependencies
-across control flow.
+Expressions are modeled as **sub-graphs**: `a + b * c` becomes a tree of
+`BINARY_OP` nodes with `LEFT_OPERAND` / `RIGHT_OPERAND` edges, not a single
+opaque label. Each operator stores its type in an `attributes` map (e.g.
+`operator=PLUS`), enabling structural code reconstruction.
+
+Edges:
+- **Data flow**: `DATA_DEP`, `ARG_PASS`, `CALL_RESULT_OF`, `RETURN_DEP`, `DEF_USE`, `PHI_INPUT`
+- **Expression**: `LEFT_OPERAND`, `RIGHT_OPERAND`, `UNARY_OPERAND`, `CAST_OPERAND`, `INSTANCEOF_OPERAND`, `TERNARY_CONDITION/THEN/ELSE`, `ARRAY_REF`, `ARRAY_INDEX`, `ARRAY_DIM`, `RECEIVER`, `ASSIGN_VALUE`, `ASSIGN_TARGET`
+- **Control**: `CONTROL_DEP`, `CONDITION`, `THEN_BRANCH`, `ELSE_BRANCH`, `LOOP_INIT`, `LOOP_UPDATE`, `LOOP_ITERABLE`, `CATCH_PARAM`, `FINALLY_BODY`, `TRY_RESOURCE`, `SYNC_LOCK`
+- **Statement**: `THROW_VALUE`, `ASSERT_MESSAGE`, `YIELD_VALUE`, `LAMBDA_BODY`
+
+Variable assignments are versioned (SSA-lite); after an `if/switch/try/loop`
+the builder produces explicit `MERGE_VALUE` (phi) nodes joining the per-branch
+versions, so the slicer can follow data dependencies across control flow.
 
 ### Build & Visualize Flow Graphs for All Methods
 
@@ -294,10 +306,67 @@ Features:
   (and therefore present in the sidebar), the info panel shows a "→ Jump to
   callee flow graph" button that switches the canvas to the callee.
 - **Filters** — checkboxes to hide whole node kinds or edge kinds. Useful for
-  reducing visual noise (e.g. hide `LOCAL_DEF` and `TEMP_EXPR` to see only the
-  call structure).
+  reducing visual noise (e.g. hide `LOCAL_DEF` and expression nodes to see
+  only the call structure).
 - **Search** — type any substring (label, id, call signature) to fade
   non-matching nodes.
+
+### Code Reconstruction from Flow Graphs
+
+The `FlowCodeReconstructor` can reconstruct Java source code from a
+`MethodFlowGraph` without access to the original source. This works because
+the expression sub-graph encodes enough structural information (operator types,
+operand relationships, control flow nesting) to regenerate semantically
+equivalent code.
+
+```java
+import com.github.sckwoky.typegraph.flow.*;
+import java.nio.file.Path;
+import java.util.List;
+
+// Build flow graphs for a project
+var entries = new ProjectFlowGraphs().buildAll(
+        List.of(Path.of("src/main/java")),
+        t -> true  // scope predicate
+);
+
+// Reconstruct code for a single method
+var graph = entries.get(0).graph();
+var reconstructor = new FlowCodeReconstructor(graph);
+String code = reconstructor.reconstruct();
+System.out.println(code);
+```
+
+### Round-Trip Verification
+
+The `FlowRoundTripVerifier` validates graph correctness by running the full
+round-trip: source -> graph -> reconstructed code -> re-parse. It checks
+parseability and computes a similarity score.
+
+```java
+import com.github.sckwoky.typegraph.flow.FlowRoundTripVerifier;
+import java.nio.file.Path;
+import java.util.List;
+
+var verifier = new FlowRoundTripVerifier();
+var report = verifier.verifyProject(List.of(Path.of("src/main/java")));
+
+System.out.println("Total methods: " + report.totalMethods());
+System.out.println("Parseable:     " + report.parseable());
+System.out.printf("Avg score:     %.2f%n", report.averageScore());
+
+// Inspect the worst-performing methods
+for (var worst : report.worstMethods()) {
+    System.out.printf("  %s -> parseable=%b, score=%.2f%n",
+            worst.methodSignature(), worst.parseable(), worst.similarityScore());
+}
+```
+
+The similarity score is a weighted metric (0.0-1.0):
+- 40% control structure match (if/for/while/switch/try counts)
+- 30% method call match
+- 20% expression operator match
+- 10% variable declaration match
 
 ### Documented limitations
 
@@ -309,11 +378,18 @@ The flow graph is an **approximation**, not a sound static analyzer:
   reachable from the try entry).
 - **Loops are processed once**: loop-carried dependencies collapse into a
   single phi merge between pre- and post-iteration versions.
-- **Lambda bodies are opaque** (the lambda becomes a single CALL with
-  `UNRESOLVED` resolution).
+- **Lambda bodies are opaque** (the lambda becomes a `LAMBDA` node with
+  parameter metadata but no body sub-graph).
 - **Arrays are monolithic**: element-wise tracking is not modeled.
 - **CALL signatures may be UNRESOLVED** when the symbol solver cannot resolve
   them — they still appear in the graph but with `callResolution=UNRESOLVED`.
+
+- **Some expression types fall through to a placeholder node**:
+  `SwitchExpr`, `ArrayInitializerExpr`, `ClassExpr`, and other uncommon
+  expression types are not yet modeled as dedicated node kinds.
+- **Reconstructed code uses FQN types** and may differ syntactically from the
+  original (reordered independent statements, extra parentheses, `var` replaced
+  with explicit types).
 
 These are intentional design constraints for an MVP that prioritizes
 visualization and evidence mining over soundness.
