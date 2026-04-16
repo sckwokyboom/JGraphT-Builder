@@ -185,47 +185,95 @@ public class FlowHtmlExporter {
                 <style>
                     * { margin: 0; padding: 0; box-sizing: border-box; }
                     body { font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', sans-serif; height: 100vh; overflow: hidden; }
-                    #layout { display: grid; grid-template-columns: 340px 1fr; height: 100vh; }
-                    #sidebar {
-                        background: #f7f8fa; border-right: 1px solid #d0d4dc;
-                        overflow-y: auto; padding: 12px;
-                        font-size: 13px;
+                    #layout { display: flex; height: 100vh; }
+                    .panel {
+                        background: #f7f8fa; display: flex; flex-direction: column;
+                        overflow: hidden; min-width: 0; flex-shrink: 0;
+                        transition: width 0.2s, min-width 0.2s, padding 0.2s, border-width 0.2s;
                     }
-                    #sidebar h2 { font-size: 15px; margin-bottom: 8px; }
+                    .panel.collapsed { width: 0 !important; min-width: 0 !important; padding: 0; overflow: hidden; }
+                    .panel.collapsed .panel-header,
+                    .panel.collapsed .panel-body { display: none; }
+                    .panel-header {
+                        position: sticky; top: 0; z-index: 2; flex-shrink: 0;
+                        background: #f7f8fa; padding: 10px 12px;
+                        border-bottom: 1px solid #e4e7ed;
+                        display: flex; align-items: center; gap: 8px;
+                    }
+                    .panel-header h2, .panel-header h3 { font-size: 14px; margin: 0; flex: 1; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+                    .panel-body { flex: 1; overflow-y: auto; padding: 8px 12px 12px; }
+                    .panel-toggle {
+                        width: 22px; height: 22px; border-radius: 4px;
+                        border: 1px solid #c3c8d3; background: #fff; cursor: pointer;
+                        font-size: 11px; line-height: 20px; text-align: center; color: #666;
+                        flex-shrink: 0;
+                    }
+                    .panel-toggle:hover { background: #e8ecf2; }
+                    .resize-handle {
+                        width: 5px; cursor: col-resize; background: #d0d4dc; flex-shrink: 0;
+                        transition: background 0.15s;
+                    }
+                    .resize-handle:hover, .resize-handle.active { background: #3498db; }
+                    .reopen-btn {
+                        position: absolute; z-index: 10;
+                        width: 24px; height: 24px; border-radius: 5px;
+                        border: 1px solid #c3c8d3; background: rgba(255,255,255,0.95);
+                        cursor: pointer; font-size: 12px; line-height: 22px; text-align: center;
+                        box-shadow: 0 1px 4px rgba(0,0,0,0.12); display: none; color: #555;
+                    }
+                    .reopen-btn:hover { background: #e8ecf2; }
+                    #left-reopen { top: 8px; left: 8px; }
+                    #right-reopen { top: 8px; right: 8px; }
+                    #sidebar { width: 320px; border-right: 1px solid #d0d4dc; }
+                    #sidebar.collapsed { border-right: none; }
+                    #sidebar .panel-body { padding-top: 4px; }
                     #sidebar input[type=text] {
                         width: 100%; padding: 6px 8px; border: 1px solid #c3c8d3;
-                        border-radius: 5px; font-size: 13px; margin-bottom: 10px;
+                        border-radius: 5px; font-size: 13px; margin-bottom: 6px;
                     }
-                    .pkg { margin-top: 8px; }
-                    .pkg-name { font-weight: 600; color: #555; font-size: 11px; text-transform: uppercase; letter-spacing: 0.05em; padding: 4px 0; }
-                    .cls { margin-left: 4px; margin-bottom: 4px; }
-                    .cls-name { font-weight: 600; color: #2c3e50; padding: 2px 0; }
+                    .pkg { margin-top: 6px; }
+                    .pkg-name {
+                        font-weight: 600; color: #555; font-size: 11px; text-transform: uppercase;
+                        letter-spacing: 0.05em; padding: 3px 0; cursor: pointer; user-select: none;
+                    }
+                    .pkg-name::before { content: '▼ '; font-size: 9px; }
+                    .pkg.collapsed > .cls { display: none; }
+                    .pkg.collapsed > .pkg-name::before { content: '▶ '; }
+                    .cls { margin-left: 4px; margin-bottom: 3px; }
+                    .cls-name {
+                        font-weight: 600; color: #2c3e50; padding: 2px 0;
+                        cursor: pointer; user-select: none; font-size: 13px;
+                    }
+                    .cls-name::before { content: '▾ '; font-size: 10px; color: #888; }
+                    .cls.collapsed > .meth { display: none; }
+                    .cls.collapsed > .cls-name::before { content: '▸ '; }
                     .meth {
                         display: flex; justify-content: space-between; align-items: center;
-                        padding: 4px 6px; border-radius: 4px; cursor: pointer;
+                        padding: 3px 6px; border-radius: 4px; cursor: pointer;
                         margin-left: 8px; font-family: 'SF Mono', Monaco, monospace; font-size: 11px;
                     }
                     .meth:hover { background: #e6ecf5; }
                     .meth.active { background: #3498db; color: white; }
-                    .meth .badges {
-                        font-size: 9px; color: #777; font-family: -apple-system, sans-serif;
-                    }
+                    .meth .badges { font-size: 9px; color: #777; font-family: -apple-system, sans-serif; }
                     .meth.active .badges { color: #cfe5fb; }
                     .badge { display: inline-block; padding: 1px 4px; border-radius: 3px; background: rgba(0,0,0,0.05); margin-left: 2px; }
                     .meth.active .badge { background: rgba(255,255,255,0.18); }
-                    #main { position: relative; }
-                    #cy { width: 100%; height: 100vh; background: #fafbfc; }
-                    #toolbar {
-                        position: absolute; top: 10px; left: 10px; z-index: 5;
-                        background: rgba(255,255,255,0.97); padding: 10px 12px; border-radius: 8px;
-                        box-shadow: 0 2px 10px rgba(0,0,0,0.15); font-size: 12px;
-                        max-width: 380px; max-height: 88vh; overflow-y: auto;
+                    #main { position: relative; flex: 1; min-width: 100px; }
+                    #cy { width: 100%; height: 100%; background: #fafbfc; }
+                    #empty {
+                        position: absolute; top: 50%; left: 50%; transform: translate(-50%, -50%);
+                        color: #999; font-size: 16px; text-align: center; pointer-events: none;
                     }
-                    #toolbar h3 { font-size: 13px; margin-bottom: 6px; }
-                    #toolbar h4 { font-size: 11px; margin: 8px 0 4px; color: #555; text-transform: uppercase; letter-spacing: 0.04em; }
-                    #toolbar label { display: block; margin: 2px 0; cursor: pointer; }
-                    #toolbar select, #toolbar input[type=text] {
+                    #right-panel { width: 340px; border-left: 1px solid #d0d4dc; }
+                    #right-panel.collapsed { border-left: none; }
+                    #right-panel h4 { font-size: 11px; margin: 10px 0 4px; color: #555; text-transform: uppercase; letter-spacing: 0.04em; }
+                    #right-panel label { display: block; margin: 2px 0; cursor: pointer; font-size: 12px; }
+                    #right-panel select, #right-panel input[type=text] {
                         width: 100%; padding: 4px 6px; border: 1px solid #ccc; border-radius: 4px; font-size: 12px;
+                    }
+                    #current-method {
+                        font-size: 13px; font-weight: 600; color: #2c3e50;
+                        padding: 4px 0 6px; word-break: break-all;
                     }
                     button {
                         padding: 4px 10px; border: 1px solid #c3c8d3; border-radius: 4px;
@@ -233,13 +281,9 @@ public class FlowHtmlExporter {
                     }
                     button:hover { background: #f0f4fa; }
                     button.active { background: #3498db; color: white; border-color: #2c80b4; }
-                    #info {
-                        position: absolute; bottom: 10px; right: 10px; z-index: 5;
-                        background: rgba(255,255,255,0.97); padding: 12px; border-radius: 8px;
-                        box-shadow: 0 2px 10px rgba(0,0,0,0.15); font-size: 12px;
-                        max-width: 460px; max-height: 60vh; overflow-y: auto; display: none;
-                        font-family: 'SF Mono', Monaco, monospace;
-                    }
+                    #info-section { border-top: 1px solid #e4e7ed; margin-top: 10px; padding-top: 8px; }
+                    #info-section h4 { margin-top: 0; }
+                    #info { font-family: 'SF Mono', Monaco, monospace; font-size: 12px; }
                     #info b { font-family: -apple-system, sans-serif; }
                     #info .field-row { margin: 2px 0; }
                     #info .field-key { color: #666; }
@@ -247,10 +291,6 @@ public class FlowHtmlExporter {
                         display: inline-block; margin-top: 6px; padding: 4px 8px;
                         background: #3498db; color: white; border-radius: 4px;
                         cursor: pointer; font-family: -apple-system, sans-serif;
-                    }
-                    #empty {
-                        position: absolute; top: 50%; left: 50%; transform: translate(-50%, -50%);
-                        color: #999; font-size: 16px; text-align: center;
                     }
                     .kind-row {
                         display: flex; align-items: center; padding: 2px 4px;
@@ -276,15 +316,33 @@ public class FlowHtmlExporter {
             </head>
             <body>
                 <div id="layout">
-                    <aside id="sidebar">
-                        <h2>Methods</h2>
-                        <input type="text" id="sidebar-search" placeholder="Filter methods…">
-                        <div id="method-tree"></div>
+                    <aside id="sidebar" class="panel">
+                        <div class="panel-header">
+                            <h2>Methods</h2>
+                            <button class="panel-toggle" id="left-collapse" title="Hide">◀</button>
+                        </div>
+                        <div class="panel-body">
+                            <input type="text" id="sidebar-search" placeholder="Filter methods…">
+                            <div id="method-tree"></div>
+                        </div>
                     </aside>
+                    <div class="resize-handle" id="left-handle"></div>
                     <main id="main">
-                        <div id="toolbar">
-                            <h3 id="current-method">Pick a method</h3>
-                            <input type="text" id="node-search" placeholder="Search nodes in this method…">
+                        <button class="reopen-btn" id="left-reopen" title="Show methods">▶</button>
+                        <button class="reopen-btn" id="right-reopen" title="Show controls">◀</button>
+                        <div id="empty">No method selected</div>
+                        <div id="cy"></div>
+                        <div id="popover"></div>
+                    </main>
+                    <div class="resize-handle" id="right-handle"></div>
+                    <aside id="right-panel" class="panel">
+                        <div class="panel-header">
+                            <h3>Controls</h3>
+                            <button class="panel-toggle" id="right-collapse" title="Hide">▶</button>
+                        </div>
+                        <div class="panel-body">
+                            <div id="current-method">Pick a method</div>
+                            <input type="text" id="node-search" placeholder="Search nodes…">
                             <h4>Slice mode</h4>
                             <label><input type="checkbox" id="slice-toggle"> Highlight backward slice</label>
                             <select id="return-picker" style="margin-top:4px"></select>
@@ -298,12 +356,12 @@ public class FlowHtmlExporter {
                             <div id="edge-filters"></div>
                             <h4>Legend</h4>
                             <div id="legend"></div>
+                            <div id="info-section">
+                                <h4>Selected node</h4>
+                                <div id="info">Click a node in the graph</div>
+                            </div>
                         </div>
-                        <div id="empty">No method selected</div>
-                        <div id="cy"></div>
-                        <div id="info"></div>
-                        <div id="popover"></div>
-                    </main>
+                    </aside>
                 </div>
                 <script>
                 const INDEX = __INDEX_JSON__;
@@ -360,20 +418,26 @@ public class FlowHtmlExporter {
                         const pkgEl = document.createElement('div');
                         pkgEl.className = 'pkg';
                         pkgEl.innerHTML = '<div class="pkg-name">' + escapeHtml(pkg) + '</div>';
+                        pkgEl.querySelector('.pkg-name').addEventListener('click', function() {
+                            pkgEl.classList.toggle('collapsed');
+                        });
                         Object.keys(groups[pkg]).sort().forEach(cls => {
                             const clsEl = document.createElement('div');
                             clsEl.className = 'cls';
                             clsEl.innerHTML = '<div class="cls-name">' + escapeHtml(cls) + '</div>';
+                            clsEl.querySelector('.cls-name').addEventListener('click', function() {
+                                clsEl.classList.toggle('collapsed');
+                            });
                             groups[pkg][cls].forEach(row => {
                                 const m = document.createElement('div');
                                 m.className = 'meth';
                                 m.dataset.fileId = row.fileId;
                                 m.dataset.search = (row.displayName + ' ' + row.signature).toLowerCase();
                                 const badges =
-                                    (row.stats.branches > 0 ? '<span class="badge">B' + row.stats.branches + '</span>' : '') +
-                                    (row.stats.loops > 0 ? '<span class="badge">L' + row.stats.loops + '</span>' : '') +
-                                    (row.stats.calls > 0 ? '<span class="badge">C' + row.stats.calls + '</span>' : '') +
-                                    (row.stats.returns > 0 ? '<span class="badge">R' + row.stats.returns + '</span>' : '');
+                                    (row.stats.branches > 0 ? '<span class="badge" title="Branches (if/switch/try/ternary): ' + row.stats.branches + '">B' + row.stats.branches + '</span>' : '') +
+                                    (row.stats.loops > 0 ? '<span class="badge" title="Loops (for/foreach/while/do-while): ' + row.stats.loops + '">L' + row.stats.loops + '</span>' : '') +
+                                    (row.stats.calls > 0 ? '<span class="badge" title="Calls (method/constructor invocations): ' + row.stats.calls + '">C' + row.stats.calls + '</span>' : '') +
+                                    (row.stats.returns > 0 ? '<span class="badge" title="Returns: ' + row.stats.returns + '">R' + row.stats.returns + '</span>' : '');
                                 m.innerHTML = '<span>' + escapeHtml(row.methodName) + '</span><span class="badges">' + badges + '</span>';
                                 m.addEventListener('click', () => loadAndShow(row.fileId));
                                 clsEl.appendChild(m);
@@ -425,7 +489,7 @@ public class FlowHtmlExporter {
                     });
 
                     cy.on('tap', 'node', evt => showInfo(evt.target));
-                    cy.on('tap', evt => { if (evt.target === cy) document.getElementById('info').style.display = 'none'; });
+                    cy.on('tap', evt => { /* panel stays open, close via button */ });
 
                     populateReturnPicker(payload);
                     applyFiltersAndSlice(payload);
@@ -522,11 +586,15 @@ public class FlowHtmlExporter {
                         html += '<div class="jump-link" onclick="loadAndShow(\\'' + target + '\\')">→ Jump to callee flow graph</div>';
                     }
                     info.innerHTML = html;
-                    info.style.display = 'block';
+                    const rp = document.getElementById('right-panel');
+                    if (rp.classList.contains('collapsed')) {
+                        rp.classList.remove('collapsed');
+                        document.getElementById('right-reopen').style.display = 'none';
+                    }
                 }
 
                 function setLayout(name) {
-                    document.querySelectorAll('#toolbar button').forEach(b => b.classList.remove('active'));
+                    document.querySelectorAll('#btn-dagre, #btn-cose').forEach(b => b.classList.remove('active'));
                     const btn = document.getElementById('btn-' + name);
                     if (btn) btn.classList.add('active');
                     if (!cy) return;
@@ -631,6 +699,54 @@ public class FlowHtmlExporter {
                 buildSidebar();
                 buildFilterCheckboxes();
                 buildLegend();
+
+                /* ── Panel collapse/expand ── */
+                function setupPanel(panel, collapseBtn, reopenBtn) {
+                    collapseBtn.addEventListener('click', () => {
+                        panel.classList.add('collapsed');
+                        reopenBtn.style.display = 'block';
+                    });
+                    reopenBtn.addEventListener('click', () => {
+                        panel.classList.remove('collapsed');
+                        reopenBtn.style.display = 'none';
+                    });
+                }
+                setupPanel(document.getElementById('sidebar'),
+                           document.getElementById('left-collapse'),
+                           document.getElementById('left-reopen'));
+                setupPanel(document.getElementById('right-panel'),
+                           document.getElementById('right-collapse'),
+                           document.getElementById('right-reopen'));
+
+                /* ── Resize handles ── */
+                function setupResize(handle, panel, side) {
+                    let dragging = false, startX, startW;
+                    handle.addEventListener('mousedown', e => {
+                        dragging = true; startX = e.clientX;
+                        startW = panel.offsetWidth;
+                        handle.classList.add('active');
+                        document.body.style.cursor = 'col-resize';
+                        document.body.style.userSelect = 'none';
+                        e.preventDefault();
+                    });
+                    document.addEventListener('mousemove', e => {
+                        if (!dragging) return;
+                        const dx = side === 'left' ? e.clientX - startX : startX - e.clientX;
+                        const w = Math.max(180, Math.min(startW + dx, window.innerWidth * 0.45));
+                        panel.style.width = w + 'px';
+                    });
+                    document.addEventListener('mouseup', () => {
+                        if (!dragging) return;
+                        dragging = false;
+                        handle.classList.remove('active');
+                        document.body.style.cursor = '';
+                        document.body.style.userSelect = '';
+                    });
+                }
+                setupResize(document.getElementById('left-handle'),
+                            document.getElementById('sidebar'), 'left');
+                setupResize(document.getElementById('right-handle'),
+                            document.getElementById('right-panel'), 'right');
                 </script>
             </body>
             </html>
