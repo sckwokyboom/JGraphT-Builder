@@ -26,6 +26,10 @@ dependencies {
 
     implementation 'com.github.javaparser:javaparser-symbol-solver-core:3.26.4'
 
+    // Eclipse JDT Core (standalone, for semantic analysis)
+    implementation 'org.eclipse.jdt:org.eclipse.jdt.core:3.40.0'
+    implementation 'org.eclipse.jdt:ecj:3.40.0'
+
     implementation 'info.picocli:picocli:4.7.6'
     annotationProcessor 'info.picocli:picocli-codegen:4.7.6'
 
@@ -45,11 +49,11 @@ tasks.withType(JavaCompile).configureEach {
 }
 
 tasks.withType(JavaExec).configureEach {
-    jvmArgs '--enable-preview'
+    jvmArgs '--enable-preview', '--enable-native-access=ALL-UNNAMED'
 }
 
 tasks.withType(Test).configureEach {
-    jvmArgs '--enable-preview'
+    jvmArgs '--enable-preview', '--enable-native-access=ALL-UNNAMED'
     testLogging {
         showStandardStreams = true
         exceptionFormat = 'full'
